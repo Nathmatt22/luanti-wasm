@@ -99,6 +99,11 @@ jobs:
         working-directory: port
         run: |
           set -o pipefail
+          # A restored build tree only has to be brought up to date, which is
+          # minutes rather than the half hour a clean one takes.
+          if [ -d build/luanti ]; then
+            export INCREMENTAL=true
+          fi
           if ./build_luanti.sh > build.log 2>&1; then
             tail -n 15 build.log
             exit 0
@@ -114,10 +119,14 @@ jobs:
       - name: Stage the zips the play page loads
         run: |
           set -euo pipefail
+          # Which command broke is only in the log, which needs a token; the
+          # line number goes where the checks page shows it.
+          trap 'echo "::error::staging failed at line $LINENO"' ERR
           git clone https://github.com/luanti-org/minetest_game.git minetest_game
           git -C minetest_game checkout "$MTG_REV"
-          inst=port/build/luanti-install
-          stage=stage
+          inst="$PWD/port/build/luanti-install"
+          # Absolute: zip runs in a subshell that has changed directory.
+          stage="$PWD/stage"
           rm -rf "$stage"
           mkdir -p "$stage/base/bin" "$stage/base/cache" "$stage/games"
           cp -r "$inst"/builtin "$inst"/client "$inst"/fonts "$inst"/locale "$inst"/textures "$stage/base/"
