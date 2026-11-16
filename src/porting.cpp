@@ -1014,6 +1014,9 @@ SafeAreaInsets getSafeAreaInsets(u32 width, u32 height)
 		cached_height = height;
 
 		int css[4] = {0, 0, 0, 0}; // top, right, bottom, left
+		// No commas outside a call in this code: the macro takes it as its
+		// first argument, and a comma would end that argument and leave the
+		// rest of the code to the C++ compiler.
 		MAIN_THREAD_EM_ASM({
 			try {
 				var div = document.createElement("div");
@@ -1025,12 +1028,15 @@ SafeAreaInsets getSafeAreaInsets(u32 width, u32 height)
 						"env(safe-area-inset-left)";
 				document.body.appendChild(div);
 				var style = getComputedStyle(div);
-				var insets = [style.paddingTop, style.paddingRight,
-						style.paddingBottom, style.paddingLeft];
+				var top = parseFloat(style.paddingTop) || 0;
+				var right = parseFloat(style.paddingRight) || 0;
+				var bottom = parseFloat(style.paddingBottom) || 0;
+				var left = parseFloat(style.paddingLeft) || 0;
 				div.remove();
-				for (var i = 0; i < 4; i++)
-					HEAP32[($0 >> 2) + i] =
-						Math.round(parseFloat(insets[i]) || 0);
+				HEAP32[($0 >> 2) + 0] = Math.round(top);
+				HEAP32[($0 >> 2) + 1] = Math.round(right);
+				HEAP32[($0 >> 2) + 2] = Math.round(bottom);
+				HEAP32[($0 >> 2) + 3] = Math.round(left);
 			} catch (e) {
 			}
 		}, css);
