@@ -87,6 +87,17 @@ private:
 	// current screen size
 	v2u32 m_screensize;
 
+	// Insets of the display's safe area (a notch, rounded corners, the home
+	// indicator) in pixels, so the console is not drawn under them.
+	s32 m_inset_left = 0;
+	s32 m_inset_top = 0;
+	s32 m_inset_right = 0;
+
+	s32 safeWidth() const
+	{
+		return (s32)m_screensize.X - m_inset_left - m_inset_right;
+	}
+
 	// used to compute how much time passed since last animate()
 	u64 m_animate_time_old;
 

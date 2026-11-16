@@ -111,6 +111,22 @@ extern "C" {
                             const char *prefix, size_t count,
                             void *data, size_t size);
 
+    // Memory of the module's own, since malloc is not exported by name, and a
+    // page handing over an archive needs some to hand it over in.
+    EMSCRIPTEN_KEEPALIVE
+    void *emloop_alloc(size_t size);
+
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_free(void *ptr);
+
+    // Install a game from a zip the player picked. `name` is the directory it
+    // is installed as. Where the game starts inside the archive is worked out
+    // here, so the page only has to hand over the bytes of the zip.
+    // Takes ownership of `data`, which must come from emloop_alloc().
+    // Answers asynchronously with emloop_zip_installed().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_install_game_zip(const char *name, void *data, size_t size);
+
     EMSCRIPTEN_KEEPALIVE
     void emloop_invoke_main(int argc, char* argv[]);
 
@@ -221,6 +237,31 @@ static EM_BOOL on_mouse(
 
 void emloop_init() {
     mainThreadId = pthread_self();
+
+    // Luanti is a landscape game: the Android app asks for sensorLandscape, and
+    // a phone playing in the browser should get the same. The Screen
+    // Orientation API only allows the lock while the page is full screen, and
+    // the page owns full screen, so ask again whenever it enters it. A browser
+    // without the API (Safari) or one that refuses simply stays as it is, and
+    // so does a computer with a mouse.
+    MAIN_THREAD_EM_ASM({
+        if (!window.matchMedia || !window.matchMedia("(pointer: coarse)").matches)
+            return;
+        if (!screen.orientation || typeof screen.orientation.lock !== "function")
+            return;
+        var lock = function () {
+            if (!document.fullscreenElement)
+                return;
+            try {
+                var p = screen.orientation.lock("landscape");
+                if (p && p.catch)
+                    p.catch(function () {});
+            } catch (e) {
+            }
+        };
+        document.addEventListener("fullscreenchange", lock);
+        lock();
+    });
 }
 
 static std::string pathjoin(std::string a, std::string b) {
@@ -1393,6 +1434,114 @@ void emloop_install_zip(const char *kind, const char *name, const char *prefix,
     }
     post([zipKind, zipName, zipPrefix, count, data, size]() {
         do_install_zip(zipKind, zipName, zipPrefix, count, data, size);
+        free(data);
+    });
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Installing a game the player picked
+/////////////////////////////////////////////////////////////////////////////
+
+void *emloop_alloc(size_t size) {
+    return malloc(size);
+}
+
+void emloop_free(void *ptr) {
+    free(ptr);
+}
+
+// Work out where the game in the zip starts, and how many entries it holds.
+//
+// An archive made by zipping a folder holds the game in a folder of its own
+// (mygame/game.conf, and everything else below mygame), and one made from
+// inside the game's folder holds game.conf at the top. Both are taken to be
+// the game itself. An archive that looks like neither is installed as it is,
+// and the installer refuses it for want of a game.conf at the root: guessing
+// further would install one game's files over another's.
+//
+// The entry count is what how far along the unpacking is is measured against,
+// so it counts every entry that is a file or a directory, the two the
+// installer writes. Entries the prefix leaves out are counted too, which only
+// makes the progress bar reach its end early.
+static bool scan_game_zip(void *data, size_t size, std::string &prefix, size_t &count)
+{
+    struct archive *a = archive_read_new();
+    bool ok = false;
+    count = 0;
+    if (archive_read_support_format_zip(a) != ARCHIVE_OK) {
+        std::cout << "emloop_install_game_zip failed: zip is not supported" << std::endl;
+    } else if (archive_read_open_memory(a, data, size) != ARCHIVE_OK) {
+        std::cout << "emloop_install_game_zip failed: invalid archive" << std::endl;
+    } else {
+        const std::string marker = installMarker("game");
+        // The folder every entry sits in, as long as they all sit in the same
+        // one, and the one a game.conf was found directly below.
+        std::string folder;
+        std::string nested;
+        bool at_top = false;
+        bool several_folders = false;
+        struct archive_entry *entry;
+        for (;;) {
+            int r = archive_read_next_header(a, &entry);
+            if (r == ARCHIVE_EOF) {
+                ok = true;
+                break;
+            }
+            if (r < ARCHIVE_WARN) {
+                std::cout << "emloop_install_game_zip: read next header: "
+                          << archive_error_string(a) << std::endl;
+                break;
+            }
+            const mode_t type = archive_entry_filetype(entry);
+            if (type != AE_IFREG && type != AE_IFDIR)
+                continue;
+            const char *rawpath = archive_entry_pathname(entry);
+            const std::string rel = rawpath ? zipEntryRelPath("", rawpath) : std::string();
+            if (rel.empty())
+                continue;
+            count++;
+            const size_t slash = rel.find('/');
+            if (slash == std::string::npos) {
+                if (rel == marker)
+                    at_top = true;
+                continue;
+            }
+            const std::string top = rel.substr(0, slash);
+            if (folder.empty())
+                folder = rel.substr(0, rel.find('/'));
+            else if (top != folder)
+                several_folders = true;
+            if (rel.size() > slash + 1 &&
+                    rel.compare(slash + 1, rel.size() - slash - 1, marker) == 0)
+                nested = top;
+        }
+        if (ok && !at_top && !nested.empty() && !several_folders)
+            prefix = nested + "/";
+    }
+    archive_read_close(a);
+    archive_read_free(a);
+    return ok;
+}
+
+void emloop_install_game_zip(const char *name, void *data, size_t size) {
+    std::string gameName(name ? name : "");
+    if (!validPackName(gameName)) {
+        std::cout << "emloop_install_game_zip: rejecting invalid game name" << std::endl;
+        free(data);
+        notifyZipInstalled("game", gameName, false);
+        return;
+    }
+    std::string prefix;
+    size_t count = 0;
+    if (!scan_game_zip(data, size, prefix, count)) {
+        free(data);
+        notifyZipInstalled("game", gameName, false);
+        return;
+    }
+    std::cout << "emloop_install_game_zip: installing " << gameName << " from "
+              << count << " entries under \"" << prefix << "\"" << std::endl;
+    post([gameName, prefix, count, data, size]() {
+        do_install_zip("game", gameName, prefix, count, data, size);
         free(data);
     });
 }

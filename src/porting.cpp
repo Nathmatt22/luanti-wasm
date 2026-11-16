@@ -63,6 +63,8 @@
 #include "util/tracy_wrapper.h"
 #include <vector>
 #include <csignal>
+#include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <optional>
@@ -994,6 +996,69 @@ bool open_directory(const std::string &path)
 	// This is done on all platforms because why not.
 
 	return open_uri(fs::AbsolutePath(path));
+}
+
+SafeAreaInsets getSafeAreaInsets(u32 width, u32 height)
+{
+#if defined(__EMSCRIPTEN__)
+	// What the browser reports as env(safe-area-inset-*) is in CSS pixels, the
+	// canvas is drawn in device pixels. The answer only changes when the page
+	// resizes or rotates, and asking takes a round trip to the browser thread,
+	// so it is cached for the drawable it was asked about. A page that does not
+	// put the game under the cutouts (no viewport-fit=cover) reports zero.
+	static u32 cached_width = 0, cached_height = 0;
+	static SafeAreaInsets cached;
+
+	if (width != cached_width || height != cached_height) {
+		cached_width = width;
+		cached_height = height;
+
+		int css[4] = {0, 0, 0, 0}; // top, right, bottom, left
+		MAIN_THREAD_EM_ASM({
+			try {
+				var div = document.createElement("div");
+				div.style.cssText = "position:fixed;left:0;top:0;" +
+					"visibility:hidden;pointer-events:none;" +
+					"padding:env(safe-area-inset-top) " +
+						"env(safe-area-inset-right) " +
+						"env(safe-area-inset-bottom) " +
+						"env(safe-area-inset-left)";
+				document.body.appendChild(div);
+				var style = getComputedStyle(div);
+				var insets = [style.paddingTop, style.paddingRight,
+						style.paddingBottom, style.paddingLeft];
+				div.remove();
+				for (var i = 0; i < 4; i++)
+					HEAP32[($0 >> 2) + i] =
+						Math.round(parseFloat(insets[i]) || 0);
+			} catch (e) {
+			}
+		}, css);
+
+		double dpr = emscripten_get_device_pixel_ratio();
+		if (!(dpr > 0.0))
+			dpr = 1.0;
+
+		SafeAreaInsets in;
+		in.top = (u32)std::lround(std::max(0.0, css[0] * dpr));
+		in.right = (u32)std::lround(std::max(0.0, css[1] * dpr));
+		in.bottom = (u32)std::lround(std::max(0.0, css[2] * dpr));
+		in.left = (u32)std::lround(std::max(0.0, css[3] * dpr));
+
+		// No browser reports anything close to this; take it as no answer
+		// rather than squeezing the UI into a corner.
+		if (in.left + in.right >= width / 2 ||
+				in.top + in.bottom >= height / 2)
+			in = SafeAreaInsets{};
+
+		cached = in;
+	}
+	return cached;
+#else
+	(void)width;
+	(void)height;
+	return SafeAreaInsets{};
+#endif
 }
 
 // Load performance counter frequency only once at startup

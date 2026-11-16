@@ -351,6 +351,20 @@ bool open_url(const std::string &url);
  */
 bool open_directory(const std::string &path);
 
+/**
+ * Insets of the display's safe area in drawing-buffer pixels: the space taken
+ * by a notch, rounded corners or the home indicator, for a drawable of the
+ * given size. All zero where the platform does not report them.
+ */
+struct SafeAreaInsets {
+	u32 left = 0;
+	u32 top = 0;
+	u32 right = 0;
+	u32 bottom = 0;
+};
+
+SafeAreaInsets getSafeAreaInsets(u32 width, u32 height);
+
 } // namespace porting
 
 #ifdef __ANDROID__

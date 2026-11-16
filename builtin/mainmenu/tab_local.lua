@@ -454,6 +454,10 @@ end
 
 local function on_change(type)
 	if type == "ENTER" then
+		-- The player can install a game from this tab (the web build's import
+		-- button), so the list taken when the menu was built can be out of
+		-- date by the time it is shown again.
+		pkgmgr.reload_games()
 		local game = current_game()
 		if game then
 			apply_game(game)

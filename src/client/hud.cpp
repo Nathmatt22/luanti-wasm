@@ -9,6 +9,7 @@
 #include <iostream>
 #include <cmath>
 #include "settings.h"
+#include "porting.h"
 #include "util/numeric.h"
 #include "log.h"
 #include "client.h"
@@ -381,8 +382,7 @@ void Hud::drawLuaElements(const v3s16 &camera_offset, bool only_unhidable)
 		if (only_unhidable && e->hideable)
 			continue;
 
-		v2s32 pos(floor(e->pos.X * (float) m_screensize.X + 0.5),
-				floor(e->pos.Y * (float) m_screensize.Y + 0.5));
+		v2s32 pos = getHudElementPos(e->pos);
 		switch (e->type) {
 			case HUD_ELEM_TEXT: {
 				unsigned int font_size = g_fontengine->getDefaultFontSize();
@@ -1036,6 +1036,18 @@ void Hud::updateSelectionMesh(const v3s16 &camera_offset)
 	m_halo_boxes.push_back(halo_box);
 	m_selection_mesh = convertNodeboxesToMesh(
 		m_halo_boxes, texture_uv, 0.5);
+}
+
+v2s32 Hud::getHudElementPos(const v2f &pos) const
+{
+	auto in = porting::getSafeAreaInsets(m_screensize.X, m_screensize.Y);
+	f32 usable_width = (f32)m_screensize.X - in.left - in.right;
+	f32 usable_height = (f32)m_screensize.Y - in.top - in.bottom;
+	if (usable_width <= 0 || usable_height <= 0)
+		return v2s32(floor(pos.X * (f32)m_screensize.X + 0.5f),
+				floor(pos.Y * (f32)m_screensize.Y + 0.5f));
+	return v2s32(floor(in.left + pos.X * usable_width + 0.5f),
+			floor(in.top + pos.Y * usable_height + 0.5f));
 }
 
 void Hud::resizeHotbar() {

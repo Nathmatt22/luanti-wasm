@@ -182,9 +182,14 @@ void GUIChatConsole::draw()
 		if (m_screensize.Y != 0)
 			m_height = m_height * screensize.Y / m_screensize.Y;
 		m_screensize = screensize;
+		auto in = porting::getSafeAreaInsets(screensize.X, screensize.Y);
+		m_inset_left = (s32)in.left;
+		m_inset_top = (s32)in.top;
+		m_inset_right = (s32)in.right;
 		m_desired_height = m_desired_height_fraction * m_screensize.Y;
 		reformatConsole();
-	} else if (!m_scrollbar->getAbsolutePosition().isPointInside(core::vector2di(screensize.X, m_height))) {
+	} else if (!m_scrollbar->getAbsolutePosition().isPointInside(core::vector2di(
+			AbsoluteRect.LowerRightCorner.X, AbsoluteRect.UpperLeftCorner.Y + m_height))) {
 		// the height of the chat window is no longer the height of the scrollbar
 		// happens while opening/closing the window
 		updateScrollbar(true);
@@ -208,7 +213,7 @@ void GUIChatConsole::draw()
 
 void GUIChatConsole::reformatConsole()
 {
-	s32 cols = m_screensize.X / m_fontsize.X - 2; // make room for a margin (looks better)
+	s32 cols = safeWidth() / m_fontsize.X - 2; // make room for a margin (looks better)
 	s32 rows = m_desired_height / m_fontsize.Y - 1; // make room for the input prompt
 	if (cols <= 0 || rows <= 0)
 		cols = rows = 0;
@@ -221,7 +226,8 @@ void GUIChatConsole::reformatConsole()
 
 void GUIChatConsole::recalculateConsolePosition()
 {
-	core::rect<s32> rect(0, 0, m_screensize.X, m_height);
+	core::rect<s32> rect(m_inset_left, m_inset_top,
+			m_inset_left + safeWidth(), m_inset_top + m_height);
 	DesiredRect = rect;
 	recalculateAbsolutePosition(false);
 }
@@ -311,7 +317,7 @@ void GUIChatConsole::drawText()
 
 	core::recti rect;
 	if (m_scrollbar->isVisible())
-		rect = core::rect<s32> (0, 0, m_screensize.X - getScrollbarSize(Environment), m_height);
+		rect = core::rect<s32> (0, 0, safeWidth() - getScrollbarSize(Environment), m_height);
 	else
 		rect = AbsoluteClippingRect;
 
@@ -668,6 +674,11 @@ bool GUIChatConsole::OnEvent(const SEvent& event)
 	}
 	else if(event.EventType == EET_MOUSE_INPUT_EVENT)
 	{
+		// The console is drawn at its absolute position, events come in screen
+		// coordinates.
+		const core::vector2di mouse(event.MouseInput.X - AbsoluteRect.UpperLeftCorner.X,
+				event.MouseInput.Y - AbsoluteRect.UpperLeftCorner.Y);
+
 		if (event.MouseInput.Event == EMIE_MOUSE_WHEEL)
 		{
 			s32 rows = myround(-3.0 * event.MouseInput.Wheel);
@@ -679,12 +690,12 @@ bool GUIChatConsole::OnEvent(const SEvent& event)
 				(event.MouseInput.Event == EMIE_LMOUSE_PRESSED_DOWN && m_is_ctrl_down))
 		{
 			// If clicked within console output region
-			if (event.MouseInput.Y / m_fontsize.Y < (m_height / m_fontsize.Y) - 1 )
+			if (mouse.Y / m_fontsize.Y < (m_height / m_fontsize.Y) - 1 )
 			{
 				// Translate pixel position to font position
 				bool was_url_pressed = m_cache_clickable_chat_weblinks &&
-						weblinkClick(event.MouseInput.X / m_fontsize.X,
-								event.MouseInput.Y / m_fontsize.Y);
+						weblinkClick(mouse.X / m_fontsize.X,
+								mouse.Y / m_fontsize.Y);
 
 				if (!was_url_pressed
 						&& event.MouseInput.Event == EMIE_MMOUSE_PRESSED_DOWN) {
@@ -802,7 +813,7 @@ void GUIChatConsole::updateScrollbar(bool update_size)
 	m_scrollbar->setVisible(m_scrollbar->getMin() != m_scrollbar->getMax());
 
 	if (update_size) {
-		const core::rect<s32> rect (m_screensize.X - getScrollbarSize(Environment), 0, m_screensize.X, m_height);
+		const core::rect<s32> rect (safeWidth() - getScrollbarSize(Environment), 0, safeWidth(), m_height);
 		m_scrollbar->setRelativePosition(rect);
 	}
 }

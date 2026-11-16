@@ -128,6 +128,13 @@ private:
 	v2u32 m_screensize;
 	s32 m_button_size;
 
+	// The part of the screen the controls are laid out in: the screen without
+	// the display's safe area (a notch, rounded corners, the home indicator),
+	// and where that part starts. Kept up to date by updateSafeArea().
+	v2s32 m_safe_origin{0, 0};
+	v2u32 m_safe_size{0, 0};
+	bool updateSafeArea();
+
 	// cached settings
 	TouchInteractionStyle m_interaction_style;
 	double m_touchscreen_threshold;

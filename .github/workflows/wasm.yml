@@ -1,0 +1,122 @@
+name: wasm
+
+# The web build, made from the branch this runs on rather than from the pins in
+# wasmgame/build.sh: this fork already is the Luanti the port would otherwise
+# patch, so there is no luanti.diff, and the build changes webport.diff made are
+# made here instead. Artifacts: luanti.js, luanti.wasm, import-game.js and the
+# two zips the play page loads.
+on:
+  push:
+    branches: [wasmgame]
+  pull_request:
+    branches: [wasmgame]
+  workflow_dispatch:
+
+env:
+  WEBPORT_REV: 5bfae52b53605b39667dfc29cddd59c861e38111
+  MTG_REV: c42e4d0c0ff9d27ff7b9b308c3cfc14098dd3a0f
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Check out this branch
+        uses: actions/checkout@v4
+        with:
+          path: luanti
+          fetch-depth: 1
+
+      - name: Set up Node.js (emsdk)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake make g++ zip unzip wget curl python3 gettext tcl
+
+      - name: Fetch the web port
+        run: |
+          git clone https://github.com/paradust7/minetest-wasm.git port
+          git -C port checkout "$WEBPORT_REV"
+
+      - name: Fetch its sources
+        # Installs and patches emsdk 6.0.8 through common.sh, and fetches zstd,
+        # webshims, libarchive, libzip, curl and openssl.
+        working-directory: port
+        run: ./fetch_sources.sh
+
+      - name: Build this branch in place of the pinned Luanti
+        run: |
+          rm -rf port/sources/luanti
+          cp -a luanti port/sources/luanti
+          rm -rf port/sources/luanti/.git
+
+      - name: Single player only, as webport.diff does
+        working-directory: port
+        run: |
+          # Single player needs no curl and no TLS, and building them costs more
+          # than the rest of the port put together; the unit tests are not part
+          # of what a build of a page needs either.
+          sed -i 's/ -lssl -lcrypto//' build_luanti.sh
+          sed -i '/-DCURL_LIBRARY=/d; /-DCURL_INCLUDE_DIR=/d' build_luanti.sh
+          sed -i 's/-DENABLE_UPDATE_CHECKER=0/-DENABLE_UPDATE_CHECKER=0 -DENABLE_CURL=FALSE -DBUILD_UNITTESTS=FALSE/' build_luanti.sh
+          grep -n 'ENABLE_CURL\|^export LDFLAGS=' build_luanti.sh
+
+      - name: Static zstd and libzip, as webport.diff does
+        working-directory: port
+        run: |
+          sed -i 's/-DCMAKE_INSTALL_PREFIX/-DZSTD_BUILD_SHARED=OFF -DCMAKE_INSTALL_PREFIX/' build_zstd.sh
+          sed -i 's/-DCMAKE_INSTALL_PREFIX/-DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX/' build_libzip.sh
+
+      - name: Build the dependencies
+        working-directory: port
+        run: |
+          ./build_zstd.sh
+          ./build_libarchive.sh
+          ./build_webshims.sh
+          ./build_libzip.sh
+
+      - name: Build Luanti
+        working-directory: port
+        run: ./build_luanti.sh
+
+      - name: Stage the zips the play page loads
+        run: |
+          set -euo pipefail
+          git clone https://github.com/luanti-org/minetest_game.git minetest_game
+          git -C minetest_game checkout "$MTG_REV"
+          inst=port/build/luanti-install
+          stage=stage
+          rm -rf "$stage"
+          mkdir -p "$stage/base/bin" "$stage/base/cache" "$stage/games"
+          cp -r "$inst"/builtin "$inst"/client "$inst"/fonts "$inst"/locale "$inst"/textures "$stage/base/"
+          echo "This is here to ensure bin exists" > "$stage/base/bin/readme.txt"
+          # No update check, and no prompts about Minetest Game or key codes
+          printf 'update_last_checked = disabled\nno_mtg_notification = true\nno_keycode_migration_warning = true\n' > "$stage/base/cache/common.conf"
+          git -C minetest_game archive --format=tar --prefix=minetest_game/ HEAD | tar -x -C "$stage/games"
+          rm -rf "$stage/games/minetest_game/.github" "$stage/games/minetest_game/utils" "$stage/games/minetest_game"/.[a-z]*
+          # Fixed timestamps, so the same files give the same zips
+          find "$stage" -exec touch -d 2000-01-01T00:00:00Z {} +
+          z() { (cd "$1" && find . -type f | LC_ALL=C sort | sed 's|^\./||' | TZ=UTC zip -q -X -9 -@ "$2"); }
+          z "$stage/base" "$stage/base.zip"
+          z "$stage/games" "$stage/games.zip"
+          b=$(sha256sum "$stage/base.zip" | cut -c1-12)
+          g=$(sha256sum "$stage/games.zip" | cut -c1-12)
+          mkdir -p out
+          mv "$stage/base.zip" "out/luanti-$b.zip"
+          mv "$stage/games.zip" "out/minetest-game-$g.zip"
+          rm -rf "$stage"
+          cp port/build/luanti/bin/luanti.js port/build/luanti/bin/luanti.wasm out/
+          cp luanti/wasmgame/web/import-game.js out/
+          ls -l out
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: luanti-wasm
+          path: out/
+          if-no-files-found: error

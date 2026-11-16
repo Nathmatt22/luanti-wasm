@@ -8,10 +8,14 @@
 #   has no Exit to OS; Esc on the main menu does nothing; the page owns full
 #   screen, so the game's own is off and its full screen key (F11) asks the
 #   page instead, and the window settings the page owns are hidden like on
-#   Android; the play page gets the player's files (minetest.conf and the
-#   worlds) from wg_request_files(), read on a thread of their own between
-#   server steps, as the page must not touch the file system while the game
-#   runs;
+#   Android; a browser that reports a coarse pointer (a phone or a tablet) gets
+#   the Android touchscreen defaults, landscape while the page is full screen,
+#   and touch controls, HUD and chat kept out of the display's safe area, while
+#   one that reports a fine pointer (a mouse) stays a desktop; the play page
+#   gets the player's files
+#   (minetest.conf and the worlds) from wg_request_files(), read on a thread of
+#   their own between server steps, as the page must not touch the file system
+#   while the game runs;
 # - webport.diff (build scripts): static zstd and libzip, no curl or TLS
 #   (single player needs no network), no unit tests, and the module takes its
 #   canvas, file locations and output from the play page, which writes the

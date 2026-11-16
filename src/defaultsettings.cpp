@@ -12,6 +12,10 @@
 #include "util/string.h"
 #include "server.h" // flagdesc_anticheat
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 
 /*
  * inspired by https://github.com/systemd/systemd/blob/7aed43437175623e0f3ae8b071bbc500c13ce893/src/hostname/hostnamed.c#L406
@@ -22,6 +26,20 @@ static bool detect_touch()
 {
 #if defined(__ANDROID__)
 	return true;
+#elif defined(__EMSCRIPTEN__)
+	// The browser knows what it runs on, the game does not: a coarse primary
+	// pointer is a finger, i.e. a phone or a tablet, while a fine one is a
+	// mouse, also on a laptop with a touchscreen. Ask on the browser thread,
+	// as the game itself runs in a worker; a browser without matchMedia, or
+	// with JavaScript turned off, counts as a desktop.
+	return MAIN_THREAD_EM_ASM_INT({
+		try {
+			return window.matchMedia &&
+					window.matchMedia("(pointer: coarse)").matches ? 1 : 0;
+		} catch (e) {
+			return 0;
+		}
+	}) != 0;
 #elif defined(__linux__)
 	std::string chassis_type;
 
@@ -83,7 +101,13 @@ void set_default_settings()
 	// Client
 	settings->setDefault("address", "");
 	settings->setDefault("remote_port", "30000");
-#if defined(__unix__) && !defined(__APPLE__) && !defined (__ANDROID__)
+#if defined(__EMSCRIPTEN__)
+	// The browser gives a reliable answer (see detect_touch), so the touchscreen
+	// controls follow the hardware, as on Android: on for a phone or a tablet,
+	// off for a computer with a mouse. "auto" would leave the first tap in a
+	// world unhandled, as it only switches on the first touch.
+	settings->setDefault("touch_controls", bool_to_cstr(has_touch));
+#elif defined(__unix__) && !defined(__APPLE__) && !defined (__ANDROID__)
 	// On Linux+X11 (not Linux+Wayland or Linux+XWayland), I've encountered a bug
 	// where fake mouse events were generated from touch events if in relative
 	// mouse mode, resulting in the touchscreen controls being instantly disabled
@@ -258,7 +282,12 @@ void set_default_settings()
 	settings->setDefault("screen_h", "600");
 	settings->setDefault("window_maximized", "false");
 	settings->setDefault("autosave_screensize", "true");
+#ifdef __EMSCRIPTEN__
+	// The web page owns full screen
+	settings->setDefault("fullscreen", "false");
+#else
 	settings->setDefault("fullscreen", bool_to_cstr(has_touch));
+#endif
 	settings->setDefault("vsync", "false");
 	settings->setDefault("fov", "72");
 	settings->setDefault("leaves_style", "fancy");

@@ -198,6 +198,7 @@ TouchControls::TouchControls(IrrlichtDevice *device, ISimpleTextureSource *tsrc)
 {
 	m_screensize = m_device->getVideoDriver()->getScreenSize();
 	m_button_size = ButtonLayout::getButtonSize(m_screensize);
+	updateSafeArea();
 
 	readSettings();
 	for (auto name : setting_names)
@@ -228,9 +229,36 @@ void TouchControls::readSettings()
 	applyLayout(ButtonLayout::loadFromSettings());
 }
 
+bool TouchControls::updateSafeArea()
+{
+	auto in = porting::getSafeAreaInsets(m_screensize.X, m_screensize.Y);
+
+	v2s32 origin(in.left, in.top);
+	v2s32 size((s32)m_screensize.X - (s32)in.left - (s32)in.right,
+			(s32)m_screensize.Y - (s32)in.top - (s32)in.bottom);
+
+	// Never let a bad answer from the platform shrink the controls into
+	// nothing; the whole screen is always a workable answer.
+	if (size.X <= 2 * m_button_size || size.Y <= 2 * m_button_size) {
+		origin = v2s32(0, 0);
+		size = v2s32((s32)m_screensize.X, (s32)m_screensize.Y);
+	}
+
+	v2u32 new_size((u32)size.X, (u32)size.Y);
+	bool changed = origin != m_safe_origin || new_size != m_safe_size;
+	m_safe_origin = origin;
+	m_safe_size = new_size;
+	return changed;
+}
+
 void TouchControls::applyLayout(const ButtonLayout &layout)
 {
 	m_layout = layout;
+
+	// Everything is laid out inside the safe part of the screen, then moved
+	// into place.
+	const v2s32 origin = m_safe_origin;
+	const v2u32 size = m_safe_size;
 
 	m_buttons.clear();
 	m_overflow_btn = nullptr;
@@ -243,23 +271,23 @@ void TouchControls::applyLayout(const ButtonLayout &layout)
 	// Joystick is placed on the bottom left of screen.
 	if (m_fixed_joystick) {
 		m_joystick_btn_off = grab_gui_element<IGUIImage>(makeButtonDirect(joystick_off_id,
-				recti(m_button_size,
-						m_screensize.Y - m_button_size * 4,
-						m_button_size * 4,
-						m_screensize.Y - m_button_size), true));
+				recti(origin.X + m_button_size,
+						origin.Y + (s32)size.Y - m_button_size * 4,
+						origin.X + m_button_size * 4,
+						origin.Y + (s32)size.Y - m_button_size), true));
 	} else {
 		m_joystick_btn_off = grab_gui_element<IGUIImage>(makeButtonDirect(joystick_off_id,
-				recti(m_button_size,
-						m_screensize.Y - m_button_size * 3,
-						m_button_size * 3,
-						m_screensize.Y - m_button_size), true));
+				recti(origin.X + m_button_size,
+						origin.Y + (s32)size.Y - m_button_size * 3,
+						origin.X + m_button_size * 3,
+						origin.Y + (s32)size.Y - m_button_size), true));
 	}
 
 	m_joystick_btn_bg = grab_gui_element<IGUIImage>(makeButtonDirect(joystick_bg_id,
-			recti(m_button_size,
-					m_screensize.Y - m_button_size * 4,
-					m_button_size * 4,
-					m_screensize.Y - m_button_size), false));
+			recti(origin.X + m_button_size,
+					origin.Y + (s32)size.Y - m_button_size * 4,
+					origin.X + m_button_size * 4,
+					origin.Y + (s32)size.Y - m_button_size), false));
 
 	m_joystick_btn_center = grab_gui_element<IGUIImage>(makeButtonDirect(joystick_center_id,
 			recti(0, 0, m_button_size, m_button_size), false));
@@ -268,7 +296,8 @@ void TouchControls::applyLayout(const ButtonLayout &layout)
 		if (!mayAddButton(id))
 			continue;
 
-		recti rect = m_layout.getRect(id, m_screensize, m_button_size, m_texturesource);
+		recti rect = m_layout.getRect(id, size, m_button_size, m_texturesource);
+		rect += origin;
 		if (id == toggle_chat_id)
 			// Chat is shown by default, so chat_hide_btn.png is shown first.
 			addToggleButton(m_buttons, id, "chat_hide_btn.png",
@@ -295,8 +324,10 @@ void TouchControls::applyLayout(const ButtonLayout &layout)
 				return !mayAddButton(id) || id == overflow_id;
 			}), overflow_buttons.end());
 
-	layout_button_grid(m_screensize, m_texturesource, overflow_buttons,
+	layout_button_grid(size, m_texturesource, overflow_buttons,
 			[&] (touch_gui_button_id id, v2s32 pos, recti rect) {
+		pos += origin;
+		rect += origin;
 		if (id == toggle_chat_id)
 			// Chat is shown by default, so chat_hide_btn.png is shown first.
 			addToggleButton(m_overflow_buttons, id, "chat_hide_btn.png",
@@ -456,8 +487,8 @@ void TouchControls::translateEvent(const SEvent &event)
 	const s32 X = event.TouchInput.X;
 	const s32 Y = event.TouchInput.Y;
 	const v2s32 touch_pos = v2s32(X, Y);
-	const v2s32 fixed_joystick_center = v2s32(half_button_size * 5,
-			m_screensize.Y - half_button_size * 5);
+	const v2s32 fixed_joystick_center = v2s32(m_safe_origin.X + half_button_size * 5,
+			m_safe_origin.Y + (s32)m_safe_size.Y - half_button_size * 5);
 	const v2s32 dir_fixed = touch_pos - fixed_joystick_center;
 
 	if (event.TouchInput.Event == ETIE_PRESSED_DOWN) {
@@ -506,7 +537,8 @@ void TouchControls::translateEvent(const SEvent &event)
 		// Select joystick when joystick tapped (fixed joystick position) or
 		// when left 1/3 of screen dragged (free joystick position)
 		if ((m_fixed_joystick && dir_fixed.getLengthSQ() <= fixed_joystick_range_sq) ||
-				(!m_fixed_joystick && X < m_screensize.X / 3.0f)) {
+				(!m_fixed_joystick &&
+						X < m_safe_origin.X + m_safe_size.X / 3.0f)) {
 			// If we don't already have a starting point for joystick, make this the one.
 			if (!m_has_joystick_id) {
 				m_has_joystick_id           = true;
@@ -628,11 +660,13 @@ void TouchControls::step(float dtime)
 	v2u32 screensize = m_device->getVideoDriver()->getScreenSize();
 	s32 button_size = ButtonLayout::getButtonSize(screensize);
 
-	if (m_screensize != screensize || m_button_size != button_size) {
-		m_screensize = screensize;
-		m_button_size = button_size;
+	bool layout_changed = m_screensize != screensize || m_button_size != button_size;
+	m_screensize = screensize;
+	m_button_size = button_size;
+	layout_changed |= updateSafeArea();
+
+	if (layout_changed)
 		applyLayout(m_layout);
-	}
 
 	// simulate keyboard repeats
 	buttonsStep(m_buttons, dtime);

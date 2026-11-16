@@ -100,6 +100,11 @@ public:
 
 private:
 	bool calculateScreenPos(const v3s16 &camera_offset, HudElement *e, v2s32 *pos);
+
+	// Where a HUD element's normalized position lands on screen. Kept out of
+	// the display's safe area (a notch, rounded corners, home indicator), which
+	// only changes anything on devices that report one.
+	v2s32 getHudElementPos(const v2f &pos) const;
 	void drawStatbar(v2s32 pos, u16 corner, u16 drawdir,
 			const std::string &texture, const std::string& bgtexture,
 			s32 count, s32 maxcount, v2s32 offset, v2f size = v2f());
