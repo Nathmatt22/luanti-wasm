@@ -43,6 +43,20 @@ jobs:
           git clone https://github.com/paradust7/minetest-wasm.git port
           git -C port checkout "$WEBPORT_REV"
 
+      # emsdk and the dependency libraries only change when the port does, and
+      # they take most of the run; the log of a failed build is not readable
+      # from outside without a token, so a build that breaks has to be cheap to
+      # try again.
+      - name: Restore emsdk and the dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            port/emsdk
+            port/build
+            port/sources
+            port/.deps-ok
+          key: wasm-deps-${{ env.WEBPORT_REV }}
+
       - name: Fetch its sources
         # Installs and patches emsdk 6.0.8 through common.sh, and fetches zstd,
         # webshims, libarchive, libzip, curl and openssl.
@@ -64,25 +78,38 @@ jobs:
           sed -i 's/ -lssl -lcrypto//' build_luanti.sh
           sed -i '/-DCURL_LIBRARY=/d; /-DCURL_INCLUDE_DIR=/d' build_luanti.sh
           sed -i 's/-DENABLE_UPDATE_CHECKER=0/-DENABLE_UPDATE_CHECKER=0 -DENABLE_CURL=FALSE -DBUILD_UNITTESTS=FALSE/' build_luanti.sh
-          grep -n 'ENABLE_CURL\|^export LDFLAGS=' build_luanti.sh
-
-      - name: Static zstd and libzip, as webport.diff does
-        working-directory: port
-        run: |
           sed -i 's/-DCMAKE_INSTALL_PREFIX/-DZSTD_BUILD_SHARED=OFF -DCMAKE_INSTALL_PREFIX/' build_zstd.sh
           sed -i 's/-DCMAKE_INSTALL_PREFIX/-DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX/' build_libzip.sh
+          grep -n 'ENABLE_CURL\|^export LDFLAGS=' build_luanti.sh
 
       - name: Build the dependencies
         working-directory: port
         run: |
+          if [ -f .deps-ok ]; then
+            echo "restored from the cache"
+            exit 0
+          fi
           ./build_zstd.sh
           ./build_libarchive.sh
           ./build_webshims.sh
           ./build_libzip.sh
+          touch .deps-ok
 
       - name: Build Luanti
         working-directory: port
-        run: ./build_luanti.sh
+        run: |
+          set -o pipefail
+          if ./build_luanti.sh > build.log 2>&1; then
+            tail -n 15 build.log
+            exit 0
+          fi
+          # The job log needs a token to read, the annotations on the commit do
+          # not, so what broke goes where the checks page shows it.
+          grep -n -i -E 'CMake Error|error:|fatal error|undefined reference|No such file' build.log \
+            | head -n 8 \
+            | while IFS= read -r line; do echo "::error::$line"; done
+          tail -n 40 build.log
+          exit 1
 
       - name: Stage the zips the play page loads
         run: |
