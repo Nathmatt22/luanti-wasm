@@ -141,6 +141,8 @@
 		removeGame: removeGame,
 		deleteWorld: deleteWorld,
 		saveWorld: saveWorld,
+		readConf: readConf,
+		writeConf: writeConf,
 		say: say,
 		progress: progress
 	};
@@ -263,6 +265,14 @@
 		answer("usage:" + kind + ":" + name, bytes);
 	}
 
+	function emloop_conf_read(text) {
+		answer("conf:read", text);
+	}
+
+	function emloop_conf_written(ok) {
+		answer("conf:write", !!ok);
+	}
+
 	// The terminal is not part of this page: it only shows what the engine
 	// writes to it in the console.
 	function emloop_terminal_output(ptr, len) {
@@ -286,6 +296,8 @@
 		emloop_world_deleted: emloop_world_deleted,
 		emloop_world_delete_progress: emloop_world_delete_progress,
 		emloop_usage_result: emloop_usage_result,
+		emloop_conf_read: emloop_conf_read,
+		emloop_conf_written: emloop_conf_written,
 		emloop_terminal_output: emloop_terminal_output,
 		emloop_exited: emloop_exited,
 		wg_files: wg_files
@@ -512,6 +524,30 @@
 		var waiting = wait("pack-removed:" + name, "Suppression de « " + name + " »");
 		call("emloop_remove_pack", ["string"], [name]);
 		return waiting;
+	}
+
+	// minetest.conf, through the engine. The engine is the one that opens the
+	// file when it starts, so reading and writing it here, on the worker
+	// thread that owns the mount, is what makes the launcher show and save
+	// exactly the settings the next launch will load.
+	function readConf() {
+		if (Luanti.dead)
+			return Promise.reject(new Error("Le jeu est fermé : rechargez la page."));
+		var waiting = wait("conf:read", "Lecture des réglages");
+		call("emloop_read_conf", [], []);
+		return waiting;
+	}
+
+	function writeConf(text) {
+		if (Luanti.dead)
+			return Promise.reject(new Error("Le jeu est fermé : rechargez la page."));
+		var waiting = wait("conf:write", "Enregistrement des réglages");
+		call("emloop_write_conf", ["string"], [String(text)]);
+		return waiting.then(function (ok) {
+			if (!ok)
+				throw new Error("le moteur n'a pas pu écrire minetest.conf");
+			return true;
+		});
 	}
 
 	function deleteWorld(name) {

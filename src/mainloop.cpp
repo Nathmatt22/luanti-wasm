@@ -152,6 +152,20 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void emloop_set_conf(const char *defaults, const char *overrides);
 
+    // The contents of minetest.conf, read through the engine's own file
+    // system: what the launcher shows is then what the next start will load,
+    // and the page never has to reach for the storage itself.
+    // Answers asynchronously with emloop_conf_read().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_read_conf();
+
+    // Replace minetest.conf, again through the engine's file system. The
+    // engine is what reads that file, when it starts, so a change made here
+    // applies to the next launch and not to a game already running.
+    // Answers asynchronously with emloop_conf_written().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_write_conf(const char *text);
+
     // Keys pressed in the page's terminal, as the bytes a tty would deliver.
     // See the terminal section below.
     EMSCRIPTEN_KEEPALIVE
@@ -1809,6 +1823,34 @@ void emloop_set_conf(const char *defaults, const char *overrides) {
     std::string defaultConf(defaults ? defaults : "");
     std::string overrideConf(overrides ? overrides : "");
     post([defaultConf, overrideConf]() { do_set_conf(defaultConf, overrideConf); });
+}
+
+void emloop_read_conf() {
+    post([]() {
+        std::string text;
+        // Not there yet on a first visit: the engine writes it at startup.
+        if (!readWholeFile(LUANTI_ROOT "/minetest.conf", text))
+            text.clear();
+        MAIN_THREAD_EM_ASM({
+            emloop_conf_read(UTF8ToString($0));
+        }, text.c_str());
+    });
+}
+
+void emloop_write_conf(const char *text) {
+    std::string contents(text ? text : "");
+    // On the worker thread, like every other write: OPFS goes through a worker
+    // of its own, and the browser thread has to stay free to relay it.
+    post([contents]() {
+        bool ok = writeWholeFile(LUANTI_ROOT "/minetest.conf", contents);
+        if (!ok) {
+            std::cout << "emloop_write_conf: could not write " LUANTI_ROOT
+                      "/minetest.conf" << std::endl;
+        }
+        MAIN_THREAD_EM_ASM({
+            emloop_conf_written($0);
+        }, ok ? 1 : 0);
+    });
 }
 
 /////////////////////////////////////////////////////////////////////////////

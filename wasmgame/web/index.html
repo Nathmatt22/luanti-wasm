@@ -380,8 +380,9 @@
 					</div>
 					<p id="conf-hint" class="hint">
 						Le fichier <code>minetest.conf</code> du jeu, une ligne par réglage
-						(<code>viewing_range = 100</code>). Il est lu au démarrage : enregistrez,
-						puis lancez la partie pour que les changements s'appliquent.
+						(<code>viewing_range = 100</code>). Il est lu et écrit par le moteur,
+						qui relit ce fichier à son démarrage : ce qui est enregistré ici
+						s'applique au prochain lancement, jamais à une partie en cours.
 						L'IPv6 reste à <code>false</code> sur cette page, la passerelle ne
 						relayant que l'IPv4.
 					</p>
