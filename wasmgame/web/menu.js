@@ -19,6 +19,10 @@
 	// the player used last.
 	var GAME_KEY = "luanti.game";
 
+	// The engine's settings file, at the top of the mount, the same one the game
+	// writes when a setting is changed in its menu.
+	var CONF_FILE = "minetest.conf";
+
 	// Joining a server.
 	var PROXY_KEY = "luanti.proxy";
 	var JOIN_KEY = "luanti.join";
@@ -59,6 +63,10 @@
 		browseButton: document.getElementById("browse"),
 		servers: document.getElementById("servers"),
 		proxy: document.getElementById("proxy"),
+		confText: document.getElementById("conf-text"),
+		confSave: document.getElementById("conf-save"),
+		confReload: document.getElementById("conf-reload"),
+		confHint: document.getElementById("conf-hint"),
 		drop: document.getElementById("drop")
 	};
 
@@ -862,6 +870,84 @@
 	}
 
 	/////////////////////////////////////////////////////////////////////////
+	// The settings file
+	/////////////////////////////////////////////////////////////////////////
+
+	var CONF_HINT = "Le fichier minetest.conf du jeu, une ligne par réglage "
+			+ "(viewing_range = 100). Il est lu au démarrage : enregistrez, puis "
+			+ "lancez la partie pour que les changements s'appliquent. L'IPv6 reste "
+			+ "à false sur cette page, la passerelle ne relayant que l'IPv4.";
+
+	function confMessage(text, failed) {
+		if (!els.confHint)
+			return;
+		els.confHint.textContent = text;
+		els.confHint.style.color = failed ? "var(--danger)" : "";
+	}
+
+	function loadConf() {
+		if (!els.confText)
+			return Promise.resolve();
+		els.confSave.disabled = true;
+		return luantiDir().then(function (dir) {
+			if (!dir) {
+				els.confText.value = "";
+				els.confText.disabled = true;
+				els.confSave.disabled = true;
+				els.confReload.disabled = true;
+				confMessage("Ce navigateur ne donne pas de stockage : ce fichier ne "
+						+ "peut pas être conservé.", true);
+				return;
+			}
+			return readText(dir, CONF_FILE).then(function (text) {
+				// The engine writes the file itself, and adds its defaults to it,
+				// on the first start; before that there is nothing to edit.
+				els.confText.value = text === null ? "" : text;
+				els.confSave.disabled = false;
+				confMessage(text === null
+						? "Le jeu n'a pas encore écrit ce fichier : il le crée, avec ses "
+							+ "valeurs par défaut, au premier démarrage."
+						: "Lu depuis le stockage du navigateur.");
+			}, function (err) {
+				els.confText.value = "";
+				confMessage("Le fichier n'a pas pu être lu : " + err.message, true);
+			});
+		});
+	}
+
+	// Written from the page, which is only safe before the engine holds the
+	// mount: the launcher is hidden once the game starts, and this checks it too.
+	function saveConf() {
+		// Disabled until the file has been read, so that an empty box can never
+		// overwrite it, and never while the engine holds the mount.
+		if (!els.confText || els.confSave.disabled
+				|| document.body.classList.contains("playing"))
+			return;
+		var text = els.confText.value;
+		if (text && text.slice(-1) !== "\n")
+			text += "\n";
+		els.confSave.disabled = true;
+		luantiDir().then(function (dir) {
+			if (!dir)
+				throw new Error("ce navigateur ne donne pas de stockage");
+			return dir.getFileHandle(CONF_FILE, { create: true });
+		}).then(function (handle) {
+			return handle.createWritable();
+		}).then(function (writable) {
+			return writable.write(text).then(function () {
+				return writable.close();
+			});
+		}).then(function () {
+			els.confText.value = text;
+			confMessage("Enregistré. Les réglages sont lus au prochain démarrage du jeu.");
+		}, function (err) {
+			confMessage("Le fichier n'a pas pu être enregistré : " + err.message, true);
+		}).then(function () {
+			els.confSave.disabled = false;
+		});
+	}
+
+	/////////////////////////////////////////////////////////////////////////
 	// Entry point
 	/////////////////////////////////////////////////////////////////////////
 
@@ -874,6 +960,12 @@
 		setupJoin();
 		els.newGame.addEventListener("click", newGame);
 		els.importButton.addEventListener("click", pickFile);
+		if (els.confSave) {
+			els.confSave.addEventListener("click", saveConf);
+			els.confReload.addEventListener("click", loadConf);
+			confMessage(CONF_HINT);
+			loadConf();
+		}
 		message("");
 		if (global.Luanti && global.Luanti.persistent)
 			els.storage.textContent = "Lecture du stockage…";

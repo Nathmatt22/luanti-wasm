@@ -233,6 +233,29 @@
 	}
 	#servers { margin-top: .2rem; }
 
+	/* minetest.conf, as the engine has it. Monospace, because it is a file. */
+	.card.settings { gap: .8rem; }
+	textarea {
+		width: 100%;
+		min-height: 14rem;
+		resize: vertical;
+		box-sizing: border-box;
+		border: 1px solid var(--line);
+		border-radius: .5rem;
+		background: #101319;
+		color: var(--text);
+		font: 400 .9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+		padding: .55rem .6rem;
+	}
+	textarea:focus {
+		outline: 2px solid var(--accent);
+		outline-offset: -1px;
+	}
+	#conf-hint code {
+		font: inherit;
+		color: var(--text);
+	}
+
 	/* Dropping an archive anywhere on the launcher installs it, which is how a
 	   file is handed over on a computer. */
 	/* Over the game, not over the launcher: the page it is on has a full screen
@@ -346,6 +369,23 @@
 					Aucun jeu installé : importez une archive .zip de jeu.
 				</p>
 				<p class="hint">Le jeu sélectionné est celui que « Nouvelle partie » propose.</p>
+
+				<h2>Réglages du jeu</h2>
+				<div class="card settings">
+					<textarea id="conf-text" spellcheck="false" wrap="off" rows="14"
+						aria-label="Contenu de minetest.conf">Chargement…</textarea>
+					<div class="actionbar">
+						<button id="conf-save" class="button primary" type="button" disabled>Enregistrer</button>
+						<button id="conf-reload" class="button plain" type="button">Recharger</button>
+					</div>
+					<p id="conf-hint" class="hint">
+						Le fichier <code>minetest.conf</code> du jeu, une ligne par réglage
+						(<code>viewing_range = 100</code>). Il est lu au démarrage : enregistrez,
+						puis lancez la partie pour que les changements s'appliquent.
+						L'IPv6 reste à <code>false</code> sur cette page, la passerelle ne
+						relayant que l'IPv4.
+					</p>
+				</div>
 			</div>
 		</div>
 	</div>
