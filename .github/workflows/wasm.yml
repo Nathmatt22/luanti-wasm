@@ -59,9 +59,16 @@ jobs:
 
       - name: Fetch its sources
         # Installs and patches emsdk 6.0.8 through common.sh, and fetches zstd,
-        # webshims, libarchive, libzip, curl and openssl.
+        # webshims, libarchive, libzip, curl and openssl. A restored cache is
+        # already past all of that, and fetch_sources.sh would patch emsdk a
+        # second time.
         working-directory: port
-        run: ./fetch_sources.sh
+        run: |
+          if [ -f .deps-ok ] && [ -d emsdk ] && [ -d sources ]; then
+            echo "emsdk and the sources are restored from the cache"
+          else
+            ./fetch_sources.sh
+          fi
 
       - name: Build this branch in place of the pinned Luanti
         run: |
