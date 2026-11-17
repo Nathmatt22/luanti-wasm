@@ -784,6 +784,10 @@
 			var server = list[i];
 			if (!server || !server.address || server.password)
 				continue;
+			// The gateway resolves names and reaches IPv4 only, so a server
+			// listed by its IPv6 address cannot be joined from the page.
+			if (server.address.indexOf(":") !== -1)
+				continue;
 			var clients = server.clients || 0;
 			var max = server.clients_max || 0;
 			if (max && clients >= max)

@@ -110,6 +110,13 @@ void Address::Resolve(const char *name, Address *fallback)
 
 	// set a type, so every unique address is only returned once
 	hints.ai_socktype = SOCK_DGRAM;
+#ifdef __EMSCRIPTEN__
+	// A name is resolved by the WebSocket gateway, which answers with one IPv4
+	// address and refuses a request carrying any flag or asking for anything
+	// else.
+	hints.ai_family = AF_INET;
+	hints.ai_flags = 0;
+#else
 	if (g_settings->getBool("enable_ipv6")) {
 		// AF_UNSPEC allows both IPv6 and IPv4 addresses to be returned
 		hints.ai_family = AF_UNSPEC;
@@ -117,6 +124,7 @@ void Address::Resolve(const char *name, Address *fallback)
 		hints.ai_family = AF_INET;
 	}
 	hints.ai_flags = AI_ADDRCONFIG;
+#endif
 
 	// Do getaddrinfo()
 	struct addrinfo *resolved = nullptr;

@@ -36,12 +36,15 @@
 	};
 
 	// Written into minetest.conf where it does not have them yet, so that what
-	// the player changed in game stays.
+	// the player changed in game stays. IPv6 is off because the WebSocket
+	// gateway relays IPv4 only, and a socket is only made for it: the engine
+	// would bind an IPv6 one and fail.
 	var CONF_DEFAULTS = [
 		"update_last_checked = disabled",
 		"no_mtg_notification = true",
 		"no_keycode_migration_warning = true",
-		"console_alpha = 200"
+		"console_alpha = 200",
+		"enable_ipv6 = false"
 	].join("\n");
 
 	var canvas = document.getElementById("canvas");

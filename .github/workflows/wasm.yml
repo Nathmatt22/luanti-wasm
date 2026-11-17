@@ -15,6 +15,12 @@ on:
 env:
   WEBPORT_REV: 5bfae52b53605b39667dfc29cddd59c861e38111
   MTG_REV: c42e4d0c0ff9d27ff7b9b308c3cfc14098dd3a0f
+  # The public gateways the page offers still speak the protocol of 2022: they
+  # resolve a name when asked at 10.0.0.1:53, and they give a client no address
+  # to bind a socket on. The port pins the rewrite of September 2026, which asks
+  # for both, so it is replaced with the revision the gateways answer.
+  WEBSHIMS_PIN: 70653a91c974aa2b20df09a39f858d92e663c1a7
+  WEBSHIMS_REV: 91c3fe85d2cb7f85cc8e19d3f53dc8f252a69ff7
 
 jobs:
   build:
@@ -64,6 +70,15 @@ jobs:
         # second time.
         working-directory: port
         run: |
+          # A cold cache fetches what the script names, so the pin is changed
+          # before it runs; the step below replaces a restored checkout. A pin
+          # this no longer matches means the port moved: the change below has to
+          # follow it, and the job says so rather than building the wrong one.
+          if ! grep -q "$WEBSHIMS_PIN" fetch_sources.sh; then
+            echo "::error::fetch_sources.sh no longer pins webshims at $WEBSHIMS_PIN"
+            exit 1
+          fi
+          sed -i "s/$WEBSHIMS_PIN/$WEBSHIMS_REV/" fetch_sources.sh
           if [ -f .deps-ok ] && [ -d emsdk ] && [ -d sources ]; then
             echo "emsdk and the sources are restored from the cache"
           else
@@ -104,6 +119,21 @@ jobs:
           ./build_webshims.sh
           ./build_libzip.sh
           touch .deps-ok
+
+      - name: Build the webshims the gateways speak
+        # A restored cache holds the revision the port pins, so the checkout and
+        # the library Luanti links against are both replaced here. On a fresh
+        # cache the step above has already built the right one, and this only
+        # builds it once more.
+        working-directory: port
+        run: |
+          set -euo pipefail
+          if [ "$(git -C sources/webshims rev-parse -q HEAD 2>/dev/null || true)" != "$WEBSHIMS_REV" ]; then
+            rm -rf sources/webshims
+            git clone --quiet https://github.com/paradust7/webshims.git sources/webshims
+            git -C sources/webshims checkout --quiet "$WEBSHIMS_REV"
+          fi
+          ./build_webshims.sh
 
       - name: Build Luanti
         working-directory: port
