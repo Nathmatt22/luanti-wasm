@@ -77,6 +77,14 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void emloop_install_pack(const char *name, const char *version, void *data, size_t size);
 
+    // Install the engine's own files, the page's base zip, into LUANTI_ROOT.
+    // The archive holds them relative to it (builtin/..., client/...), and
+    // `version` says what they are, so that they are unpacked again only when
+    // the page has a new zip. Takes ownership of `data`, which must come from
+    // emloop_alloc(). Answers asynchronously with emloop_pack_installed("base").
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_install_base_zip(const char *version, void *data, size_t size);
+
     // Delete everything a pack installed, and stop counting it as installed.
     // Answers asynchronously with emloop_pack_removed().
     EMSCRIPTEN_KEEPALIVE
@@ -119,13 +127,17 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void emloop_free(void *ptr);
 
-    // Install a game from a zip the player picked. `name` is the directory it
-    // is installed as. Where the game starts inside the archive is worked out
-    // here, so the page only has to hand over the bytes of the zip.
+    // Install a game from a zip. `name` is the directory it is installed as;
+    // `version` says what the zip holds, and an install of the same version is
+    // skipped, which is what a launcher shipping a game wants. Where the game
+    // starts inside the archive is worked out here, so the page only has to
+    // hand over the bytes. An empty version (a game the player picked) is
+    // always installed, as no page can know whether it changed.
     // Takes ownership of `data`, which must come from emloop_alloc().
     // Answers asynchronously with emloop_zip_installed().
     EMSCRIPTEN_KEEPALIVE
-    void emloop_install_game_zip(const char *name, void *data, size_t size);
+    void emloop_install_game_zip(const char *name, const char *version,
+                                 void *data, size_t size);
 
     EMSCRIPTEN_KEEPALIVE
     void emloop_invoke_main(int argc, char* argv[]);
@@ -540,12 +552,18 @@ static void notifyPackProgress(const std::string &name, double fraction) {
     }, name.c_str(), fraction);
 }
 
+static std::string zipEntryRelPath(const std::string &prefix, const std::string &path);
+
 // Adapted from https://github.com/libarchive/libarchive/wiki/Examples#a-complete-extractor
 //
 // Every path extracted below LUANTI_ROOT is appended to `manifest` so that the
-// next version of the pack can clean up after this one.
+// next version of the pack can clean up after this one. `root` is where the
+// entries are placed: LUANTI_ROOT for the engine's own files, which are
+// relative in the archive, and empty for a pack, whose paths are already the
+// ones it wants.
+
 static bool extract_archive(struct archive *a, const std::string &name, size_t total,
-                            std::string &manifest)
+                            std::string &manifest, const std::string &root)
 {
     struct archive *ext = archive_write_disk_new();
     archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_PERM);
@@ -571,6 +589,18 @@ static bool extract_archive(struct archive *a, const std::string &name, size_t t
         if (r < ARCHIVE_WARN) {
             std::cout << "emloop_install_pack: Error while expanding pack" << std::endl;
             return false;
+        }
+        // An archive of the engine's own files holds them relative to
+        // LUANTI_ROOT (builtin/..., client/...), so the root goes in front of
+        // each path. Anything that could reach outside it, or that is not a
+        // plain path, is left out rather than cleaned up.
+        if (!root.empty()) {
+            const char *entrypath = archive_entry_pathname(entry);
+            const std::string rel = entrypath ? zipEntryRelPath("", entrypath)
+                                              : std::string();
+            if (rel.empty())
+                continue;
+            archive_entry_set_pathname(entry, (root.substr(1) + "/" + rel).c_str());
         }
         r = archive_write_header(ext, entry);
         if (r < ARCHIVE_OK)
@@ -615,8 +645,27 @@ static bool unpack(const std::string &name, void *data, size_t size, std::string
         std::cout << "emloop_install_pack failed: tar not supported" << std::endl;
     } else if (archive_read_open_memory(a, data, size) != ARCHIVE_OK) {
         std::cout << "emloop_install_pack failed: invalid archive" << std::endl;
-    } else if (extract_archive(a, name, size, manifest)) {
+    } else if (extract_archive(a, name, size, manifest, "")) {
         std::cout << "emloop_install_pack: Installed " << name << " successfully" << std::endl;
+        ok = true;
+    }
+    archive_read_close(a);
+    archive_read_free(a);
+    return ok;
+}
+
+// Unpack a zip of the engine's own files below `root`, which is where every
+// entry in it is placed.
+static bool unpack_engine(const std::string &name, const std::string &root,
+                          void *data, size_t size, std::string &manifest) {
+    struct archive *a = archive_read_new();
+    bool ok = false;
+    if (archive_read_support_format_zip(a) != ARCHIVE_OK) {
+        std::cout << "emloop_install_base_zip failed: zip is not supported" << std::endl;
+    } else if (archive_read_open_memory(a, data, size) != ARCHIVE_OK) {
+        std::cout << "emloop_install_base_zip failed: invalid archive" << std::endl;
+    } else if (extract_archive(a, name, size, manifest, root)) {
+        std::cout << "emloop_install_base_zip: installed the engine's files" << std::endl;
         ok = true;
     }
     archive_read_close(a);
@@ -713,6 +762,55 @@ static void do_remove_pack(const std::string &name) {
     unlink(packMetaPath(name, ".files").c_str());
     std::cout << "emloop_remove_pack: removed " << name << std::endl;
     notifyPackRemoved(name, true);
+}
+
+// The engine's files are recorded as a pack of their own, under the name the
+// page uses for them, so that removeInstalledFiles() clears away what a new
+// base zip no longer holds and nothing else.
+static const char *const ENGINE_PACK_NAME = "base";
+
+static void do_install_base(const std::string &version, void *data, size_t size) {
+    const bool remember = persistent && !version.empty();
+    if (remember) {
+        std::string installed;
+        if (readWholeFile(packMetaPath(ENGINE_PACK_NAME, ".ver"), installed) &&
+                installed == version) {
+            std::cout << "emloop_install_base_zip: already installed, skipping" << std::endl;
+            notifyPackInstalled(ENGINE_PACK_NAME);
+            return;
+        }
+        // The marker first, so that an install cut short is retried rather
+        // than trusted.
+        unlink(packMetaPath(ENGINE_PACK_NAME, ".ver").c_str());
+        removeInstalledFiles(ENGINE_PACK_NAME, false);
+        unlink(packMetaPath(ENGINE_PACK_NAME, ".files").c_str());
+    }
+
+    std::string manifest;
+    bool ok = unpack_engine(ENGINE_PACK_NAME, LUANTI_ROOT, data, size, manifest);
+
+    if (remember && ok) {
+        if (!makeDirs(PACK_DB_DIR) ||
+                !writeWholeFile(packMetaPath(ENGINE_PACK_NAME, ".files"), manifest) ||
+                !writeWholeFile(packMetaPath(ENGINE_PACK_NAME, ".ver"), version)) {
+            std::cout << "emloop_install_base_zip: could not record the install; "
+                      << "it will be unpacked again next time" << std::endl;
+        }
+    }
+    if (!ok) {
+        std::cout << "emloop_install_base_zip: could not install the engine's files"
+                  << std::endl;
+        return;
+    }
+    notifyPackInstalled(ENGINE_PACK_NAME);
+}
+
+void emloop_install_base_zip(const char *version, void *data, size_t size) {
+    std::string packVersion(version ? version : "");
+    post([packVersion, data, size]() {
+        do_install_base(packVersion, data, size);
+        free(data);
+    });
 }
 
 void emloop_remove_pack(const char *name) {
@@ -1353,7 +1451,7 @@ static bool unzip(const std::string &kind, const std::string &name,
 
 static void do_install_zip(const std::string &kind, const std::string &name,
                            const std::string &prefix, size_t count,
-                           void *data, size_t size) {
+                           const std::string &version, void *data, size_t size) {
     const std::string dest = installRoot(kind, name);
     // A game is recorded in the pack database the way a downloaded one is, so
     // that the page lists it, can add up what it takes, and can uninstall it
@@ -1361,6 +1459,21 @@ static void do_install_zip(const std::string &kind, const std::string &name,
     // record for one. Without persistent storage there is nothing to record
     // into either: the install only lasts as long as the page.
     const bool remember = (kind == "game") && persistent;
+    // What the install is recorded as: the version the page knows it by, or
+    // "local" for a game the player picked, which no page can upgrade.
+    const std::string record = version.empty() ? LOCAL_PACK_VERSION : version;
+
+    // A page that names the version it is installing (the game a launcher ships
+    // with) does not have to unpack the same one again on every visit.
+    if (remember && !version.empty()) {
+        std::string installed;
+        if (readWholeFile(packMetaPath(name, ".ver"), installed) && installed == version) {
+            std::cout << "emloop_install_zip: " << name
+                      << " is already installed, skipping" << std::endl;
+            notifyZipInstalled(kind, name, true);
+            return;
+        }
+    }
 
     if (remember) {
         // The marker goes first, so that an install cut short leaves the game
@@ -1402,7 +1515,7 @@ static void do_install_zip(const std::string &kind, const std::string &name,
     if (remember) {
         if (!makeDirs(PACK_DB_DIR) ||
                 !writeWholeFile(packMetaPath(name, ".files"), manifest) ||
-                !writeWholeFile(packMetaPath(name, ".ver"), LOCAL_PACK_VERSION)) {
+                !writeWholeFile(packMetaPath(name, ".ver"), record)) {
             // The files are all there, but nothing says so. Leaving them
             // would be a game the page cannot see or uninstall.
             std::cout << "emloop_install_zip: could not record " << name
@@ -1433,7 +1546,7 @@ void emloop_install_zip(const char *kind, const char *name, const char *prefix,
         return;
     }
     post([zipKind, zipName, zipPrefix, count, data, size]() {
-        do_install_zip(zipKind, zipName, zipPrefix, count, data, size);
+        do_install_zip(zipKind, zipName, zipPrefix, count, "", data, size);
         free(data);
     });
 }
@@ -1523,8 +1636,10 @@ static bool scan_game_zip(void *data, size_t size, std::string &prefix, size_t &
     return ok;
 }
 
-void emloop_install_game_zip(const char *name, void *data, size_t size) {
+void emloop_install_game_zip(const char *name, const char *version,
+                             void *data, size_t size) {
     std::string gameName(name ? name : "");
+    std::string gameVersion(version ? version : "");
     if (!validPackName(gameName)) {
         std::cout << "emloop_install_game_zip: rejecting invalid game name" << std::endl;
         free(data);
@@ -1540,8 +1655,8 @@ void emloop_install_game_zip(const char *name, void *data, size_t size) {
     }
     std::cout << "emloop_install_game_zip: installing " << gameName << " from "
               << count << " entries under \"" << prefix << "\"" << std::endl;
-    post([gameName, prefix, count, data, size]() {
-        do_install_zip("game", gameName, prefix, count, data, size);
+    post([gameName, gameVersion, prefix, count, data, size]() {
+        do_install_zip("game", gameName, prefix, count, gameVersion, data, size);
         free(data);
     });
 }
@@ -2009,6 +2124,20 @@ void emloop_invoke_main(int argc, char* argv[]) {
 void emloop_request_exit() {
     // Does the same thing as SIGINT/SIGTERM.
     *porting::signal_handler_killstatus() = true;
+}
+
+void emloop_drain_queue() {
+    for (;;) {
+        std::function<void()> work;
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            if (queue.empty())
+                return;
+            work = std::move(queue.front());
+            queue.pop_front();
+        }
+        work();
+    }
 }
 
 // Run queued filesystem work until the launcher asks for main().

@@ -16,6 +16,9 @@
 // include the shadow mapper classes too
 #include "client/shadows/dynamicshadowsrender.h"
 #include <IVideoDriver.h>
+#ifdef __EMSCRIPTEN__
+#include "mainloop.h" // emloop_drain_queue
+#endif
 
 #if !IS_CLIENT_BUILD
 #error Do not include in server builds
@@ -136,6 +139,12 @@ public:
 
 	bool run()
 	{
+#ifdef __EMSCRIPTEN__
+		// Everything the page asks the module to do with the files (installing
+		// a game, deleting a world) waits in a queue, and this is the thread
+		// that may work through it.
+		emloop_drain_queue();
+#endif
 		return m_device->run();
 	}
 

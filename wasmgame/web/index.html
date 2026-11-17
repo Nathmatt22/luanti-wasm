@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover is what makes the browser report the display's safe
+     area, which the game keeps its touch controls, HUD and chat out of. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f13">
+<title>Luanti</title>
+<style>
+	html, body {
+		margin: 0;
+		padding: 0;
+		height: 100%;
+		overflow: hidden;
+		background: #0d0f13;
+		color: #e8eaf0;
+		font: 400 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+		touch-action: none;
+	}
+	canvas#canvas {
+		display: block;
+		width: 100vw;
+		height: 100vh;
+		outline: none;
+		background: #0d0f13;
+	}
+	#overlay {
+		position: fixed;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 1rem;
+		padding: max(1.5rem, env(safe-area-inset-top)) 1.5rem max(1.5rem, env(safe-area-inset-bottom));
+		box-sizing: border-box;
+		background: #0d0f13;
+		text-align: center;
+		z-index: 10;
+	}
+	#overlay.hidden { display: none; }
+	#overlay h1 {
+		margin: 0;
+		font-size: 1.6rem;
+		font-weight: 600;
+		letter-spacing: .01em;
+	}
+	#status {
+		max-width: 34rem;
+		color: #aeb4c4;
+		min-height: 1.45em;
+	}
+	#bar {
+		width: min(28rem, 80vw);
+		height: .35rem;
+		border-radius: 1rem;
+		background: #1c2027;
+		overflow: hidden;
+	}
+	#bar > div {
+		height: 100%;
+		width: 0%;
+		border-radius: inherit;
+		background: #6aa9ff;
+		transition: width .2s ease;
+	}
+	#error {
+		display: none;
+		max-width: 40rem;
+		padding: .8rem 1rem;
+		border-radius: .5rem;
+		background: #34191d;
+		color: #ffc9c9;
+		text-align: left;
+		white-space: pre-wrap;
+		font: 400 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+	#error.shown { display: block; }
+	#restart {
+		display: none;
+		margin-top: .5rem;
+		padding: .6rem 1.1rem;
+		border: 0;
+		border-radius: .5rem;
+		background: #6aa9ff;
+		color: #0d0f13;
+		font: 600 .95rem/1 system-ui, sans-serif;
+		cursor: pointer;
+	}
+	#restart.shown { display: inline-block; }
+	#fullscreen {
+		position: fixed;
+		top: max(.6rem, env(safe-area-inset-top));
+		right: max(.6rem, env(safe-area-inset-right));
+		z-index: 20;
+		display: none;
+		padding: .5rem .8rem;
+		border: 0;
+		border-radius: .5rem;
+		background: #16181de6;
+		color: #fff;
+		font: 500 .85rem/1.2 system-ui, sans-serif;
+		cursor: pointer;
+	}
+	body.playing #fullscreen { display: block; }
+</style>
+</head>
+<body>
+	<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+
+	<button id="fullscreen" type="button">Plein écran</button>
+
+	<div id="overlay">
+		<h1>Luanti</h1>
+		<div id="status">Chargement…</div>
+		<div id="bar"><div></div></div>
+		<pre id="error"></pre>
+		<button id="restart" type="button">Recharger la page</button>
+	</div>
+
+	<script src="launcher.js"></script>
+</body>
+</html>

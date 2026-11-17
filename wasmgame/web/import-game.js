@@ -99,8 +99,10 @@
 		}
 		M.HEAPU8.set(bytes, ptr);
 		say(format(labels.installing, { name: name, pct: 0 }), true);
+		// No version: the page cannot know whether a chosen zip changed, so it
+		// is installed every time.
 		M.ccall("emloop_install_game_zip", null,
-				["string", "number", "number"], [name, ptr, bytes.length]);
+				["string", "string", "number", "number"], [name, "", ptr, bytes.length]);
 		return true;
 	}
 

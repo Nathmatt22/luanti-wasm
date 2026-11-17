@@ -33,6 +33,32 @@ The module installs a game from a zip itself. `emloop_install_game_zip(name, dat
 
 The Local tab takes the list of games again each time it is shown, so an imported game appears without reloading.
 
+## Hosting it
+
+A build is five things side by side: `index.html`, `launcher.js`, `luanti.js`, `luanti.wasm` and the two zips with `packs.json` naming them (the `luanti-wasm` artifact of the wasm workflow already has them all). Serve them as static files with two headers, without which the browser will not start the build:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: credentialless
+```
+
+`wasmgame/web/_headers` is what Cloudflare Pages and Netlify read. For Caddy:
+
+```
+:8080 {
+	header {
+		Cross-Origin-Opener-Policy same-origin
+		Cross-Origin-Embedder-Policy credentialless
+	}
+	root * /srv/luanti
+	file_server
+}
+```
+
+and `tailscale serve --bg 8080` (or `tailscale funnel 8080`) puts it on the tailnet. Over nginx, the same two `add_header` lines inside `location /`. The browser must support JSPI; Chrome and Edge do.
+
+`launcher.js` fetches `packs.json`, installs the engine's files and the game into the browser's own storage (`/luanti`, over OPFS), then calls `emloop_invoke_main()`. `minetest.conf` and the worlds live in that same storage, so they are kept between visits without the page doing anything; on a browser that gives no persistent storage the game still runs, but nothing is saved. `wasmgame/web/import-game.js` can be loaded alongside for the import button.
+
 ## Licence
 
 Same as upstream: the code is LGPL-2.1-or-later (see `LICENSE.txt` and `COPYING.LESSER`), and the textures, sounds and fonts are under the licences `LICENSE.txt` lists (CC BY-SA 3.0 and 4.0, CC BY 4.0, Apache 2.0, and others). Minetest Game is LGPL-2.1-or-later with its media under CC BY-SA 3.0, CC BY 3.0 and CC0. Our changes are under the same licence as the files they change.
