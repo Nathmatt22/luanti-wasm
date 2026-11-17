@@ -214,6 +214,10 @@
 
 	// Copy `bytes` into the module's memory, which then owns them.
 	function handOver(bytes) {
+		if (!Module.HEAPU8 || !Module.HEAPU32)
+			throw new Error("Ce build n'expose pas la mémoire du module "
+					+ "(HEAPU8, HEAPU32) : il a été lié sans "
+					+ "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32.");
 		var ptr = number("emloop_alloc", ["number"], [bytes.length]);
 		if (!ptr)
 			throw new Error("Le moteur n'a plus de mémoire pour " + bytes.length + " octets.");
@@ -276,6 +280,10 @@
 	}
 
 	function invokeMain(args) {
+		if (!Module.HEAPU8 || !Module.HEAPU32)
+			throw new Error("Ce build n'expose pas la mémoire du module "
+					+ "(HEAPU8, HEAPU32) : il a été lié sans "
+					+ "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32.");
 		var argc = args.length;
 		var argv = number("emloop_alloc", ["number"], [(argc + 1) * 4]);
 		if (!argv)

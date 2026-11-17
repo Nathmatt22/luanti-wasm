@@ -84,10 +84,13 @@ jobs:
           # of what a build of a page needs either.
           sed -i 's/ -lssl -lcrypto//' build_luanti.sh
           sed -i '/-DCURL_LIBRARY=/d; /-DCURL_INCLUDE_DIR=/d' build_luanti.sh
+          # The page hands the zips over through the module's memory, and recent
+          # Emscripten only exports the heap views when they are asked for.
+          sed -i 's/EXPORTED_RUNTIME_METHODS=ccall,cwrap/EXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32/' build_luanti.sh
           sed -i 's/-DENABLE_UPDATE_CHECKER=0/-DENABLE_UPDATE_CHECKER=0 -DENABLE_CURL=FALSE -DBUILD_UNITTESTS=FALSE/' build_luanti.sh
           sed -i 's/-DCMAKE_INSTALL_PREFIX/-DZSTD_BUILD_SHARED=OFF -DCMAKE_INSTALL_PREFIX/' build_zstd.sh
           sed -i 's/-DCMAKE_INSTALL_PREFIX/-DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX/' build_libzip.sh
-          grep -n 'ENABLE_CURL\|^export LDFLAGS=' build_luanti.sh
+          grep -n 'ENABLE_CURL\|EXPORTED_RUNTIME_METHODS\|^export LDFLAGS=' build_luanti.sh
 
       - name: Build the dependencies
         working-directory: port
@@ -106,11 +109,9 @@ jobs:
         working-directory: port
         run: |
           set -o pipefail
-          # A restored build tree only has to be brought up to date, which is
-          # minutes rather than the half hour a clean one takes.
-          if [ -d build/luanti ]; then
-            export INCREMENTAL=true
-          fi
+          # A clean configure every time: the flags the step above changes are
+          # only read when cmake runs, and a cached tree would link with the
+          # old ones.
           if ./build_luanti.sh > build.log 2>&1; then
             tail -n 15 build.log
             exit 0
@@ -158,7 +159,7 @@ jobs:
           # their contents so that a visit only unpacks what changed.
           cp luanti/wasmgame/web/index.html luanti/wasmgame/web/launcher.js \
              luanti/wasmgame/web/import-game.js luanti/wasmgame/web/_headers out/
-          python3 -c 'import json,sys; b,g=sys.argv[1:3]; json.dump({"base":{"file":"luanti-%s.zip"%b,"version":b},"game":{"file":"minetest-game-%s.zip"%g,"name":"minetest_game","version":g}}, open("out/packs.json","w"), indent=1)' "$b" "$g"
+          python3 -c 'import json,sys; b,g=sys.argv[1:3]; json.dump({"base":{"file":"luanti-%s.zip"%b,"version":"%s-1"%b},"game":{"file":"minetest-game-%s.zip"%g,"name":"minetest_game","version":g}}, open("out/packs.json","w"), indent=1)' "$b" "$g"
           ls -l out
 
       - name: Upload the build
