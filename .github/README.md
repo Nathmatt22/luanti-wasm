@@ -25,6 +25,18 @@ It builds zstd, libarchive, paradust7's webshims and libzip, then Luanti, with t
 
 The build uses shared memory, so its page must be cross-origin isolated (COOP `same-origin`, COEP `credentialless`), and it needs a browser with JSPI. The page sets `Module` (`canvas`, `print`, `printErr`, `locateFile`, `onAbort`) and loads `luanti.js`; once `main()` calls `emloop_ready()`, the page writes the engine's files to `/luanti`, the game to `/luanti/games` and the player's files to `/luanti`, calls `emsocket_init()` and then `emloop_invoke_main(argc, argv)`. `irrlicht_resize(w, h)` follows the page's size. `wg_request_files()` answers with `wg_files(ptr, len)` on the page (each file as a u32 path length, the path, a u32 size and the bytes; the page frees `ptr`), or not at all when nothing changed. The page must not use the file system itself while the game runs, as that can wait on the game's threads while they wait on the page.
 
+## The launcher
+
+What a visit shows first is `menu.js`, once `launcher.js` has put the engine's files in place and before anything is started:
+
+* **Vos mondes** — every world in persistent storage, with the game it uses, its size and when it was last played. *Jouer* starts the engine on that world (`luanti --world /luanti/worlds/<name> --go`); *Enregistrer* asks the engine to pack it into a zip and hands it to the browser's downloads; *Supprimer* deletes it through the engine, so that what the mount sees and what the storage holds stay the same.
+* **Jeux** — the installed games, by the `title` in their `game.conf`, with the one this page ships (Minetest Game) marked as such and the ones imported marked as yours. The selected game is the one *Nouvelle partie* proposes: that opens the game's own menu with `menu_last_game` set to it, which is the setting the new-world dialog reads, so the world is created and named there rather than here.
+* **Importer un jeu (.zip)** — a file picker, and a drop target over the whole page, both going through `emloop_install_game_zip()`. Progress and the outcome are shown where the button is.
+
+The lists are read straight out of the browser's storage from the page: the module mounts its OPFS backend on the directory named `luanti` (see `emsdk_wasmfs_opfs_subdir.patch`), so `/luanti/games/<name>/game.conf` and `/luanti/worlds/<name>/world.mt` are `luanti/games/<name>/game.conf` and `luanti/worlds/<name>/world.mt` to `navigator.storage.getDirectory()`. Nothing is kept on the side, so a world made in the game, or a game installed from ContentDB inside it, is in the launcher on the next visit. A browser without persistent storage still gets the launcher, with *Nouvelle partie* and the import.
+
+Once the engine has quit, `main()` has returned and the wasm instance is spent: *Revenir au launcher* reloads the page, which reads the same storage and is quick, as the packs are already installed.
+
 ## Importing your own games
 
 The module installs a game from a zip itself. `emloop_install_game_zip(name, data, size)` — the memory from `emloop_alloc()`, which the module then owns — works out where the game starts inside the archive (a folder of its own holding `game.conf`, or `game.conf` at the top), unpacks everything below that into `/luanti/games/<name>`, reports progress through `emloop_zip_install_progress()` and answers with `emloop_zip_installed("game", name, ok)`. A build with OPFS keeps the game, and it is recorded in the pack database under the `local` version, the way the play page's own games are, so it can be deleted again. `name` is held to what `validPackName()` accepts: 1 to 64 of `A-Z a-z 0-9 _ - .`, not starting with a dot or a dash.
@@ -35,7 +47,7 @@ The Local tab takes the list of games again each time it is shown, so an importe
 
 ## Hosting it
 
-A build is five things side by side: `index.html`, `launcher.js`, `luanti.js`, `luanti.wasm` and the two zips with `packs.json` naming them (the `luanti-wasm` artifact of the wasm workflow already has them all). Serve them as static files with two headers, without which the browser will not start the build:
+A build is a handful of files side by side: `index.html`, `menu.js`, `launcher.js`, `luanti.js`, `luanti.wasm` and the two zips with `packs.json` naming them (the `luanti-wasm` artifact of the wasm workflow already has them all). Serve them as static files with two headers, without which the browser will not start the build:
 
 ```
 Cross-Origin-Opener-Policy: same-origin
@@ -57,7 +69,9 @@ Cross-Origin-Embedder-Policy: credentialless
 
 and `tailscale serve --bg 8080` (or `tailscale funnel 8080`) puts it on the tailnet. Over nginx, the same two `add_header` lines inside `location /`. The browser must support JSPI; Chrome and Edge do.
 
-`launcher.js` fetches `packs.json`, installs the engine's files and the game into the browser's own storage (`/luanti`, over OPFS), then calls `emloop_invoke_main()`. `minetest.conf` and the worlds live in that same storage, so they are kept between visits without the page doing anything; on a browser that gives no persistent storage the game still runs, but nothing is saved. `wasmgame/web/import-game.js` can be loaded alongside for the import button.
+`launcher.js` fetches `packs.json`, installs the engine's files and the game into the browser's own storage (`/luanti`, over OPFS), and then hands over to the launcher, which starts the engine only once the player has picked something. `minetest.conf` and the worlds live in that same storage, so they are kept between visits without the page doing anything; on a browser that gives no persistent storage the game still runs, but nothing is saved. `wasmgame/web/import-game.js` can be loaded alongside for the import button on a page of your own.
+
+The whole launcher is `index.html`, `menu.js` and `launcher.js`: it is page code, so a change to it needs no rebuild of `luanti.js` or `luanti.wasm`, only a new build for the zips and files to be staged again (or a copy of the three files onto the server).
 
 ## Licence
 

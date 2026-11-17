@@ -158,7 +158,8 @@ jobs:
           # The page, and the manifest that names the zips by the hash of
           # their contents so that a visit only unpacks what changed.
           cp luanti/wasmgame/web/index.html luanti/wasmgame/web/launcher.js \
-             luanti/wasmgame/web/import-game.js luanti/wasmgame/web/_headers out/
+             luanti/wasmgame/web/menu.js luanti/wasmgame/web/import-game.js \
+             luanti/wasmgame/web/_headers out/
           python3 -c 'import json,sys; b,g=sys.argv[1:3]; json.dump({"base":{"file":"luanti-%s.zip"%b,"version":"%s-1"%b},"game":{"file":"minetest-game-%s.zip"%g,"name":"minetest_game","version":g}}, open("out/packs.json","w"), indent=1)' "$b" "$g"
           ls -l out
 

@@ -6,6 +6,11 @@
 // emloop_invoke_main(). Everything the module calls back into is defined below,
 // so that a missing one is not a JavaScript error in the middle of a world.
 //
+// Once the engine's files are in place this file hands over to menu.js, which
+// is the launcher: it lists the worlds and the games in the browser's storage,
+// imports a game from a zip, and starts the game the player picked through
+// window.Luanti below. Nothing starts until the player asks for it.
+//
 // What it installs, from packs.json next to this page:
 //
 //   base  the engine's files (builtin, client, fonts, locale, textures), a zip
@@ -35,11 +40,13 @@
 	].join("\n");
 
 	var canvas = document.getElementById("canvas");
-	var overlay = document.getElementById("overlay");
-	var status = document.getElementById("status");
+	var launcher = document.getElementById("launcher");
+	var bootPanel = document.getElementById("boot");
+	var menuPanel = document.getElementById("menu");
+	var statusLine = document.getElementById("status");
 	var bar = document.querySelector("#bar > div");
 	var errorBox = document.getElementById("error");
-	var restart = document.getElementById("restart");
+	var restartButton = document.getElementById("restart");
 	var fullscreenButton = document.getElementById("fullscreen");
 
 	/////////////////////////////////////////////////////////////////////////
@@ -47,7 +54,7 @@
 	/////////////////////////////////////////////////////////////////////////
 
 	function say(text) {
-		status.textContent = text;
+		statusLine.textContent = text;
 		console.log("[launcher] " + text);
 	}
 
@@ -55,16 +62,24 @@
 		bar.style.width = Math.max(0, Math.min(100, fraction * 100)) + "%";
 	}
 
-	function fail(what) {
-		console.error("[launcher]", what);
-		overlay.classList.remove("hidden");
-		status.textContent = "Le jeu n'a pas pu démarrer.";
-		errorBox.textContent = what && what.stack ? String(what) : String(what);
-		errorBox.classList.add("shown");
-		restart.classList.add("shown");
+	function stop() {
+		launcher.classList.remove("hidden");
+		document.body.classList.remove("playing");
 	}
 
-	restart.addEventListener("click", function () { location.reload(); });
+	function fail(what) {
+		console.error("[launcher]", what);
+		stop();
+		bootPanel.hidden = false;
+		menuPanel.hidden = true;
+		statusLine.textContent = "Le jeu n'a pas pu démarrer.";
+		errorBox.textContent = what && what.stack ? String(what) : String(what);
+		errorBox.classList.add("shown");
+		restartButton.textContent = "Recharger la page";
+		restartButton.hidden = false;
+	}
+
+	restartButton.addEventListener("click", function () { location.reload(); });
 
 	/////////////////////////////////////////////////////////////////////////
 	// Waiting on the module's answers
@@ -96,6 +111,33 @@
 	}
 
 	/////////////////////////////////////////////////////////////////////////
+	// What menu.js drives the engine with
+	/////////////////////////////////////////////////////////////////////////
+
+	// Menu handlers for what the engine reports as it works, filled in by
+	// menu.js: on.install(kind, name, phase, fraction), on.zip(name, fraction),
+	// on.worldDelete(name, fraction), on.gameRemove(name, fraction). A page
+	// without a launcher leaves them empty.
+	var hooks = {};
+
+	var Luanti = window.Luanti = {
+		// Whether what the engine writes outlives the tab.
+		persistent: false,
+		// Set when the engine has quit: the module cannot be started twice.
+		dead: false,
+		// The zips this page ships, as packs.json names them.
+		packs: DEFAULT_PACKS,
+		on: hooks,
+		play: play,
+		installGameZip: installGameZip,
+		removeGame: removeGame,
+		deleteWorld: deleteWorld,
+		saveWorld: saveWorld,
+		say: say,
+		progress: progress
+	};
+
+	/////////////////////////////////////////////////////////////////////////
 	// What the module calls
 	/////////////////////////////////////////////////////////////////////////
 
@@ -115,12 +157,15 @@
 	};
 
 	// Main is called in a worker and asks for this; the page then does the
-	// installing and starts the game proper.
+	// installing and hands over to the launcher.
 	function emloop_ready() {
-		boot().then(function () {
-			overlay.classList.add("hidden");
-			document.body.classList.add("playing");
-			fitCanvas();
+		start().then(function () {
+			bootPanel.hidden = true;
+			menuPanel.hidden = false;
+			if (window.luantiMenu && typeof window.luantiMenu.show === "function")
+				window.luantiMenu.show();
+			else
+				say("Prêt.");
 		}).catch(fail);
 	}
 
@@ -144,17 +189,28 @@
 	}
 
 	function emloop_zip_install_progress(kind, name, phase, fraction) {
-		if (kind !== "game")
-			return;
-		say((phase === "delete" ? "Remplacement de " : "Installation de ") + name + "…");
-		progress(fraction);
+		if (typeof hooks.install === "function")
+			hooks.install(kind, name, phase, fraction);
+		else if (kind === "game")
+			progress(fraction);
 	}
 
 	function emloop_exited(code) {
-		overlay.classList.remove("hidden");
-		document.body.classList.remove("playing");
-		status.textContent = code === 0 ? "Le jeu est fermé." : "Le jeu s'est arrêté.";
-		restart.classList.add("shown");
+		// main() has returned, so the wasm instance is spent: coming back to
+		// the launcher means loading the page again, which reads the same
+		// storage and takes a moment.
+		Luanti.dead = true;
+		stop();
+		bootPanel.hidden = false;
+		menuPanel.hidden = true;
+		statusLine.textContent = code === 0 ? "Le jeu est fermé." : "Le jeu s'est arrêté.";
+		progress(1);
+		if (code !== 0) {
+			errorBox.textContent = "Le détail est dans la console du navigateur (F12).";
+			errorBox.classList.add("shown");
+		}
+		restartButton.textContent = "Revenir au launcher";
+		restartButton.hidden = false;
 	}
 
 	// The engine hands over the player's files when it saves. This page keeps
@@ -164,20 +220,47 @@
 		Module.ccall("emloop_free", null, ["number"], [ptr]);
 	}
 
-	// The rest of the module's answers, for the parts of the launcher this page
-	// leaves to the engine: the terminal, the usage and delete reports, and the
-	// zip of a world.
+	// A world the engine has packed for the player to keep. The engine waits
+	// for this call to return before going on, so the bytes are copied out
+	// here rather than held on to.
+	function emloop_world_zipped(name, ptr, len) {
+		var bytes = (ptr && len) ? Module.HEAPU8.slice(ptr, ptr + len) : null;
+		answer("world-zipped:" + name, bytes);
+	}
+
+	function emloop_world_deleted(name, ok) {
+		answer("world-deleted:" + name, !!ok);
+	}
+
+	function emloop_world_delete_progress(name, fraction) {
+		if (typeof hooks.worldDelete === "function")
+			hooks.worldDelete(name, fraction);
+	}
+
+	function emloop_pack_removed(name, ok) {
+		answer("pack-removed:" + name, !!ok);
+	}
+
+	function emloop_pack_remove_progress(name, fraction) {
+		if (typeof hooks.gameRemove === "function")
+			hooks.gameRemove(name, fraction);
+	}
+
+	function emloop_zip_progress(name, fraction) {
+		if (typeof hooks.zip === "function")
+			hooks.zip(name, fraction);
+	}
+
+	function emloop_usage_result(kind, name, bytes) {
+		answer("usage:" + kind + ":" + name, bytes);
+	}
+
+	// The terminal is not part of this page: it only shows what the engine
+	// writes to it in the console.
 	function emloop_terminal_output(ptr, len) {
 		var bytes = Module.HEAPU8.subarray(ptr, ptr + len);
 		console.log(new TextDecoder().decode(bytes));
 	}
-	function emloop_pack_removed(name, ok) { answer("pack-removed:" + name, !!ok); }
-	function emloop_pack_remove_progress(name, fraction) {}
-	function emloop_zip_progress(name, fraction) {}
-	function emloop_world_zipped(name, ptr, len) {}
-	function emloop_world_deleted(name, ok) { answer("world-deleted:" + name, !!ok); }
-	function emloop_world_delete_progress(name, fraction) {}
-	function emloop_usage_result(kind, name, bytes) { answer("usage:" + kind + ":" + name, bytes); }
 
 	// The module's EM_ASM blocks look these up as plain globals, so every one of
 	// them has to be on window under its own name.
@@ -212,12 +295,16 @@
 		return Module.ccall(name, "number", signature, args);
 	}
 
-	// Copy `bytes` into the module's memory, which then owns them.
-	function handOver(bytes) {
+	function requireHeap() {
 		if (!Module.HEAPU8 || !Module.HEAPU32)
 			throw new Error("Ce build n'expose pas la mémoire du module "
 					+ "(HEAPU8, HEAPU32) : il a été lié sans "
 					+ "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32.");
+	}
+
+	// Copy `bytes` into the module's memory, which then owns them.
+	function handOver(bytes) {
+		requireHeap();
 		var ptr = number("emloop_alloc", ["number"], [bytes.length]);
 		if (!ptr)
 			throw new Error("Le moteur n'a plus de mémoire pour " + bytes.length + " octets.");
@@ -279,11 +366,52 @@
 		});
 	}
 
+	function start() {
+		say("Préparation du stockage…");
+		var fs = wait("fs", "Préparation du stockage");
+		// Storage the page keeps between visits, where the engine writes
+		// minetest.conf, the worlds and anything installed.
+		call("emloop_init_fs", ["number"], [1]);
+
+		return fs.then(function (persistent) {
+			Luanti.persistent = persistent;
+			if (!persistent)
+				say("Ce navigateur ne donne pas de stockage : rien ne sera gardé.");
+			return loadPacks();
+		}).then(function (packs) {
+			Luanti.packs = packs;
+			return installBase(packs.base).then(function () {
+				return installGame(packs.game);
+			});
+		}).then(function () {
+			// Settings for this page; the game's own are in the base zip.
+			call("emloop_set_conf", ["string", "string"], [CONF_DEFAULTS, ""]);
+			say("Prêt.");
+		});
+	}
+
+	// Starts the engine with `args`, as if it had been run from a shell. Keys in
+	// `overrides` replace what minetest.conf holds, which is how the launcher
+	// picks the game the menu offers to start a new world with.
+	function play(args, overrides) {
+		if (Luanti.dead)
+			return;
+		try {
+			requireHeap();
+			if (overrides)
+				call("emloop_set_conf", ["string", "string"], ["", overrides]);
+			launcher.classList.add("hidden");
+			document.body.classList.add("playing");
+			call("emsocket_init", [], []);
+			fitCanvas();
+			invokeMain(args);
+		} catch (err) {
+			fail(err);
+		}
+	}
+
 	function invokeMain(args) {
-		if (!Module.HEAPU8 || !Module.HEAPU32)
-			throw new Error("Ce build n'expose pas la mémoire du module "
-					+ "(HEAPU8, HEAPU32) : il a été lié sans "
-					+ "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32.");
+		requireHeap();
 		var argc = args.length;
 		var argv = number("emloop_alloc", ["number"], [(argc + 1) * 4]);
 		if (!argv)
@@ -303,29 +431,48 @@
 		call("emloop_invoke_main", ["number", "number"], [argc, argv]);
 	}
 
-	function boot() {
-		say("Préparation du stockage…");
-		var fs = wait("fs", "Préparation du stockage");
-		// Storage the page keeps between visits, where the engine writes
-		// minetest.conf, the worlds and anything installed.
-		call("emloop_init_fs", ["number"], [1]);
+	/////////////////////////////////////////////////////////////////////////
+	// What the launcher does with the engine
+	/////////////////////////////////////////////////////////////////////////
 
-		return fs.then(function (persistent) {
-			if (!persistent)
-				say("Ce navigateur ne donne pas de stockage : rien ne sera gardé.");
-			return loadPacks();
-		}).then(function (packs) {
-			return installBase(packs.base).then(function () {
-				return installGame(packs.game);
-			});
-		}).then(function () {
-			// Settings for this page; the game's own are in the base zip.
-			call("emloop_set_conf", ["string", "string"], [CONF_DEFAULTS, ""]);
-			say("Démarrage…");
-			call("emsocket_init", [], []);
-			fitCanvas();
-			invokeMain(["luanti"]);
+	// Install a game the player picked. No version is passed: no page can know
+	// whether a chosen zip changed, so it is installed every time.
+	function installGameZip(name, bytes) {
+		if (Luanti.dead)
+			return Promise.reject(new Error("Le jeu est fermé : rechargez la page."));
+		var waiting = wait("zip:game:" + name, "Installation de « " + name + " »");
+		try {
+			call("emloop_install_game_zip", ["string", "string", "number", "number"],
+					[name, "", handOver(bytes), bytes.length]);
+		} catch (err) {
+			return Promise.reject(err);
+		}
+		return waiting.then(function (ok) {
+			if (!ok)
+				throw new Error("L'archive n'est pas un jeu : il manque un game.conf "
+						+ "à sa racine ou dans son seul dossier.");
+			return true;
 		});
+	}
+
+	// Delete a game and the files it installed. Its worlds stay.
+	function removeGame(name) {
+		var waiting = wait("pack-removed:" + name, "Suppression de « " + name + " »");
+		call("emloop_remove_pack", ["string"], [name]);
+		return waiting;
+	}
+
+	function deleteWorld(name) {
+		var waiting = wait("world-deleted:" + name, "Suppression de « " + name + " »");
+		call("emloop_delete_world", ["string"], [name]);
+		return waiting;
+	}
+
+	// Packs a world into a zip and resolves with its bytes, or null.
+	function saveWorld(name) {
+		var waiting = wait("world-zipped:" + name, "Archivage de « " + name + " »");
+		call("emloop_zip_world", ["string"], [name]);
+		return waiting;
 	}
 
 	/////////////////////////////////////////////////////////////////////////
@@ -345,7 +492,10 @@
 	var resizeTimer = 0;
 	function onResize() {
 		clearTimeout(resizeTimer);
-		resizeTimer = setTimeout(fitCanvas, 120);
+		resizeTimer = setTimeout(function () {
+			if (document.body.classList.contains("playing"))
+				fitCanvas();
+		}, 120);
 	}
 	window.addEventListener("resize", onResize);
 	window.addEventListener("orientationchange", onResize);

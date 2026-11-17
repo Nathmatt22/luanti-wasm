@@ -8,51 +8,119 @@
 <meta name="theme-color" content="#0d0f13">
 <title>Luanti</title>
 <style>
+	:root {
+		--bg: #0d0f13;
+		--panel: #14171d;
+		--card: #1a1e26;
+		--card-hover: #222836;
+		--line: #272e3b;
+		--text: #e8eaf0;
+		--dim: #a3aabc;
+		--accent: #6aa9ff;
+		--accent-ink: #0b1220;
+		--danger: #ff9a9a;
+		--danger-bg: #3a1c22;
+	}
 	html, body {
 		margin: 0;
 		padding: 0;
 		height: 100%;
 		overflow: hidden;
-		background: #0d0f13;
-		color: #e8eaf0;
+		background: var(--bg);
+		color: var(--text);
 		font: 400 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-		touch-action: none;
+		-webkit-text-size-adjust: 100%;
 	}
+	body.playing { touch-action: none; }
 	canvas#canvas {
 		display: block;
 		width: 100vw;
 		height: 100vh;
 		outline: none;
-		background: #0d0f13;
+		background: var(--bg);
+		touch-action: none;
 	}
-	#overlay {
+
+	/* The launcher covers the canvas until the player picks something to play.
+	   It scrolls, because the list of worlds grows and a phone in landscape has
+	   very little height to show it in. */
+	#launcher {
 		position: fixed;
 		inset: 0;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 1rem;
-		padding: max(1.5rem, env(safe-area-inset-top)) 1.5rem max(1.5rem, env(safe-area-inset-bottom));
-		box-sizing: border-box;
-		background: #0d0f13;
-		text-align: center;
 		z-index: 10;
+		overflow-y: auto;
+		overflow-x: hidden;
+		-webkit-overflow-scrolling: touch;
+		overscroll-behavior: contain;
+		background: radial-gradient(130% 90% at 50% 0%, #171d27 0%, var(--bg) 62%);
+		padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+			max(1.5rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+		box-sizing: border-box;
 	}
-	#overlay.hidden { display: none; }
-	#overlay h1 {
+	#launcher.hidden { display: none; }
+	#panel { max-width: 62rem; margin: 0 auto; }
+
+	header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 1rem;
+		margin-bottom: 1.4rem;
+	}
+	header h1 {
 		margin: 0;
-		font-size: 1.6rem;
+		font-size: 1.65rem;
+		font-weight: 650;
+		letter-spacing: -.01em;
+	}
+	#storage {
+		margin: .2rem 0 0;
+		color: var(--dim);
+		font-size: .88rem;
+	}
+
+	h2 {
+		margin: 1.8rem 0 .7rem;
+		font-size: .82rem;
+		font-weight: 650;
+		letter-spacing: .09em;
+		text-transform: uppercase;
+		color: var(--dim);
+	}
+
+	.button {
+		border: 0;
+		border-radius: .55rem;
+		padding: .62rem 1.05rem;
+		background: var(--card);
+		color: var(--text);
+		font: inherit;
 		font-weight: 600;
-		letter-spacing: .01em;
+		cursor: pointer;
+		white-space: nowrap;
 	}
-	#status {
-		max-width: 34rem;
-		color: #aeb4c4;
-		min-height: 1.45em;
+	.button:hover { background: var(--card-hover); }
+	.button:disabled { opacity: .45; cursor: default; }
+	.button.primary { background: var(--accent); color: var(--accent-ink); }
+	.button.primary:hover { background: #86baff; }
+	.button.small { padding: .42rem .7rem; font-size: .85rem; font-weight: 550; }
+	.button.danger { color: var(--danger); background: transparent; border: 1px solid var(--line); }
+	.button.danger:hover { background: var(--danger-bg); }
+	.button.plain { background: transparent; border: 1px solid var(--line); }
+	.button.plain:hover { background: var(--card); }
+
+	.actionbar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: .6rem;
 	}
+
+	/* Loading, and what went wrong. */
+	#boot { padding: 1rem 0 0; }
+	#status { color: var(--dim); min-height: 1.45em; }
 	#bar {
-		width: min(28rem, 80vw);
+		margin-top: .8rem;
+		width: min(28rem, 100%);
 		height: .35rem;
 		border-radius: 1rem;
 		background: #1c2027;
@@ -62,12 +130,13 @@
 		height: 100%;
 		width: 0%;
 		border-radius: inherit;
-		background: #6aa9ff;
+		background: var(--accent);
 		transition: width .2s ease;
 	}
 	#error {
 		display: none;
-		max-width: 40rem;
+		margin: 1rem 0 0;
+		max-width: 42rem;
 		padding: .8rem 1rem;
 		border-radius: .5rem;
 		background: #34191d;
@@ -77,18 +146,66 @@
 		font: 400 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
 	}
 	#error.shown { display: block; }
-	#restart {
-		display: none;
-		margin-top: .5rem;
-		padding: .6rem 1.1rem;
-		border: 0;
-		border-radius: .5rem;
-		background: #6aa9ff;
-		color: #0d0f13;
-		font: 600 .95rem/1 system-ui, sans-serif;
-		cursor: pointer;
+	#restart { margin-top: 1rem; }
+
+	/* Worlds and games. */
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+		gap: .7rem;
 	}
-	#restart.shown { display: inline-block; }
+	.card {
+		display: flex;
+		flex-direction: column;
+		gap: .15rem;
+		padding: .85rem .95rem;
+		border-radius: .7rem;
+		border: 1px solid var(--line);
+		background: var(--card);
+		box-sizing: border-box;
+		min-width: 0;
+	}
+	.card-title {
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.card-meta {
+		color: var(--dim);
+		font-size: .84rem;
+	}
+	.card-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: .4rem;
+		margin-top: .7rem;
+	}
+	.card.game {
+		cursor: pointer;
+		text-align: left;
+		color: var(--text);
+		font: inherit;
+	}
+	.card.game:hover { border-color: #3b465c; }
+	.card.game.selected {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 1px var(--accent) inset;
+	}
+	.card.game .card-actions { margin-top: .6rem; }
+	.card.busy { opacity: .6; pointer-events: none; }
+
+	.hint {
+		margin: .7rem 0 0;
+		color: var(--dim);
+		font-size: .87rem;
+	}
+	#no-worlds { margin-top: .2rem; }
+
+	/* Dropping an archive anywhere on the launcher installs it, which is how a
+	   file is handed over on a computer. */
+	/* Over the game, not over the launcher: the page it is on has a full screen
+	   button of its own, the canvas has none. */
 	#fullscreen {
 		position: fixed;
 		top: max(.6rem, env(safe-area-inset-top));
@@ -104,21 +221,75 @@
 		cursor: pointer;
 	}
 	body.playing #fullscreen { display: block; }
+
+	#drop {
+		position: fixed;
+		inset: 0;
+		z-index: 30;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 2rem;
+		background: #0d0f13ee;
+		border: 2px dashed var(--accent);
+		box-sizing: border-box;
+		color: var(--accent);
+		font-size: 1.1rem;
+		font-weight: 600;
+		text-align: center;
+		pointer-events: none;
+	}
+	#drop[hidden] { display: none; }
 </style>
 </head>
 <body>
 	<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
 
-	<button id="fullscreen" type="button">Plein écran</button>
+	<div id="launcher">
+		<div id="panel">
+			<header>
+				<div>
+					<h1>Luanti</h1>
+					<p id="storage">Stockage…</p>
+				</div>
+			</header>
 
-	<div id="overlay">
-		<h1>Luanti</h1>
-		<div id="status">Chargement…</div>
-		<div id="bar"><div></div></div>
-		<pre id="error"></pre>
-		<button id="restart" type="button">Recharger la page</button>
+			<div id="boot">
+				<div id="status">Chargement…</div>
+				<div id="bar"><div></div></div>
+				<pre id="error"></pre>
+				<button id="restart" class="button primary" type="button" hidden>Recharger la page</button>
+			</div>
+
+			<div id="menu" hidden>
+				<div class="actionbar">
+					<button id="new-game" class="button primary" type="button">Nouvelle partie</button>
+					<button id="import" class="button plain" type="button">Importer un jeu (.zip)</button>
+				</div>
+				<p id="progress" class="hint" hidden></p>
+
+				<h2>Vos mondes</h2>
+				<div id="worlds" class="grid"></div>
+				<p id="no-worlds" class="hint">
+					Aucun monde enregistré. « Nouvelle partie » ouvre le menu du jeu,
+					où vous pouvez en créer un.
+				</p>
+
+				<h2>Jeux</h2>
+				<div id="games" class="grid"></div>
+				<p id="no-games" class="hint" hidden>
+					Aucun jeu installé : importez une archive .zip de jeu.
+				</p>
+				<p class="hint">Le jeu sélectionné est celui que « Nouvelle partie » propose.</p>
+			</div>
+		</div>
 	</div>
 
+	<button id="fullscreen" type="button">Plein écran</button>
+
+	<div id="drop" hidden>Déposez une archive .zip pour installer un jeu</div>
+
+	<script src="menu.js"></script>
 	<script src="launcher.js"></script>
 </body>
 </html>
