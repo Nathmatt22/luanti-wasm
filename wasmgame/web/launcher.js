@@ -393,7 +393,11 @@
 	// Starts the engine with `args`, as if it had been run from a shell. Keys in
 	// `overrides` replace what minetest.conf holds, which is how the launcher
 	// picks the game the menu offers to start a new world with.
-	function play(args, overrides) {
+	//
+	// `proxy` names the WebSocket gateway to join a server through, and is only
+	// needed for that: a page cannot open a TCP connection, so the engine's
+	// sockets are relayed by one. Playing alone uses no gateway at all.
+	function play(args, overrides, proxy) {
 		if (Luanti.dead)
 			return;
 		try {
@@ -403,11 +407,26 @@
 			launcher.classList.add("hidden");
 			document.body.classList.add("playing");
 			call("emsocket_init", [], []);
+			if (proxy)
+				setProxy(proxy);
 			fitCanvas();
 			invokeMain(args);
 		} catch (err) {
 			fail(err);
 		}
+	}
+
+	// The gateway the engine's sockets go through. It takes a C string and keeps
+	// its own copy, so the memory here goes back as soon as it has it.
+	function setProxy(url) {
+		var bytes = new TextEncoder().encode(url);
+		var ptr = number("emloop_alloc", ["number"], [bytes.length + 1]);
+		if (!ptr)
+			throw new Error("Le moteur n'a plus de mémoire pour l'adresse de la passerelle.");
+		Module.HEAPU8.set(bytes, ptr);
+		Module.HEAPU8[ptr + bytes.length] = 0;
+		call("emsocket_set_proxy", ["number"], [ptr]);
+		call("emloop_free", ["number"], [ptr]);
 	}
 
 	function invokeMain(args) {

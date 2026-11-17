@@ -202,6 +202,37 @@
 	}
 	#no-worlds { margin-top: .2rem; }
 
+	/* Joining a server. */
+	label {
+		display: flex;
+		flex-direction: column;
+		gap: .3rem;
+		font-size: .82rem;
+		color: var(--dim);
+		min-width: 0;
+	}
+	input, select {
+		border: 1px solid var(--line);
+		border-radius: .5rem;
+		background: #101319;
+		color: var(--text);
+		font: inherit;
+		font-size: .95rem;
+		padding: .5rem .55rem;
+		min-width: 0;
+	}
+	input:focus, select:focus {
+		outline: 2px solid var(--accent);
+		outline-offset: -1px;
+	}
+	.card.join { gap: .85rem; }
+	.fields {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+		gap: .6rem;
+	}
+	#servers { margin-top: .2rem; }
+
 	/* Dropping an archive anywhere on the launcher installs it, which is how a
 	   file is handed over on a computer. */
 	/* Over the game, not over the launcher: the page it is on has a full screen
@@ -274,6 +305,40 @@
 					Aucun monde enregistré. « Nouvelle partie » ouvre le menu du jeu,
 					où vous pouvez en créer un.
 				</p>
+
+				<h2>Multijoueur</h2>
+				<div class="card join">
+					<div class="fields">
+						<label>Serveur
+							<input id="join-address" type="text" inputmode="url" autocomplete="off"
+								spellcheck="false" placeholder="play.exemple.net">
+						</label>
+						<label>Port
+							<input id="join-port" type="number" min="1" max="65535" step="1"
+								value="30000" inputmode="numeric">
+						</label>
+						<label>Nom de joueur
+							<input id="join-name" type="text" maxlength="20" autocomplete="off"
+								spellcheck="false" placeholder="votre nom">
+						</label>
+						<label>Mot de passe
+							<input id="join-password" type="password" autocomplete="off">
+						</label>
+						<label>Passerelle
+							<select id="proxy"></select>
+						</label>
+					</div>
+					<div class="actionbar">
+						<button id="join" class="button primary" type="button">Rejoindre</button>
+						<button id="browse" class="button plain" type="button">Serveurs publics</button>
+					</div>
+					<p id="join-hint" class="hint">
+						Un navigateur ne peut pas ouvrir de connexion TCP : le jeu passe par une
+						passerelle WebSocket publique, qui voit le trafic qu'elle relaie.
+						Choisissez la plus proche de vous.
+					</p>
+					<div id="servers" class="grid" hidden></div>
+				</div>
 
 				<h2>Jeux</h2>
 				<div id="games" class="grid"></div>

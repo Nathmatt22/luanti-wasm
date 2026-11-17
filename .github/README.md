@@ -31,11 +31,20 @@ What a visit shows first is `menu.js`, once `launcher.js` has put the engine's f
 
 * **Vos mondes** — every world in persistent storage, with the game it uses, its size and when it was last played. *Jouer* starts the engine on that world (`luanti --world /luanti/worlds/<name> --go`); *Enregistrer* asks the engine to pack it into a zip and hands it to the browser's downloads; *Supprimer* deletes it through the engine, so that what the mount sees and what the storage holds stay the same.
 * **Jeux** — the installed games, by the `title` in their `game.conf`, with the one this page ships (Minetest Game) marked as such and the ones imported marked as yours. The selected game is the one *Nouvelle partie* proposes: that opens the game's own menu with `menu_last_game` set to it, which is the setting the new-world dialog reads, so the world is created and named there rather than here.
+* **Multijoueur** — the address, port, player name and password to join a server with, the gateway to reach it through (see below), and the public server list. *Rejoindre* starts the engine straight into the server; the last address and name are remembered.
 * **Importer un jeu (.zip)** — a file picker, and a drop target over the whole page, both going through `emloop_install_game_zip()`. Progress and the outcome are shown where the button is.
 
 The lists are read straight out of the browser's storage from the page: the module mounts its OPFS backend on the directory named `luanti` (see `emsdk_wasmfs_opfs_subdir.patch`), so `/luanti/games/<name>/game.conf` and `/luanti/worlds/<name>/world.mt` are `luanti/games/<name>/game.conf` and `luanti/worlds/<name>/world.mt` to `navigator.storage.getDirectory()`. Nothing is kept on the side, so a world made in the game, or a game installed from ContentDB inside it, is in the launcher on the next visit. A browser without persistent storage still gets the launcher, with *Nouvelle partie* and the import.
 
 Once the engine has quit, `main()` has returned and the wasm instance is spent: *Revenir au launcher* reloads the page, which reads the same storage and is quick, as the packs are already installed.
+
+## Multiplayer
+
+A page cannot open a TCP connection, so the engine's sockets are relayed by a WebSocket gateway. The page starts the relay with `emsocket_init()` and names the gateway with `emsocket_set_proxy(url)` before `emloop_invoke_main()`; `Luanti.play(args, conf, proxy)` in `launcher.js` is that, and only a join passes a gateway. The public ones the port lists are `wss://eu1.dustlabs.io/mtproxy` (Frankfurt), `wss://luanti.dustlabs.io/proxy` (California, the port's own default), `wss://na1.dustlabs.io/mtproxy` (Dallas), `wss://sa1.dustlabs.io/mtproxy` (São Paulo), `wss://ap1.dustlabs.io/mtproxy` (Singapore) and `wss://ap2.dustlabs.io/mtproxy` (Melbourne). The launcher's *Multijoueur* section offers them, Europe by default, and remembers the choice; running your own gateway is a matter of hosting [`proxy.js`](https://github.com/paradust7/webshims/blob/main/src/emsocket/proxy.js). Whatever the gateway relays it can read, and it is told which server the player is joining.
+
+Joining is the engine's own command line: `luanti --go --address <host> --port <port> --name <player> [--password ...]`, which is what the form builds (`host:port` typed into the address field is split). *Serveurs publics* reads `https://servers.minetest.net/list` from the page, since the game's own *Join Game* tab needs HTTP support and this build is made without curl (`-DENABLE_CURL=FALSE` in the workflow); that list sends `Access-Control-Allow-Origin: *`, so a page can read it, and the launcher keeps the servers that are not full and do not ask for a password.
+
+What a build without curl loses is HTTP: ContentDB, the update check and the in-game server list. Connecting to a server is ordinary TCP and is not affected.
 
 ## Importing your own games
 

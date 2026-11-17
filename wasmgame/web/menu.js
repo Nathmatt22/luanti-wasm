@@ -19,6 +19,27 @@
 	// the player used last.
 	var GAME_KEY = "luanti.game";
 
+	// Joining a server.
+	var PROXY_KEY = "luanti.proxy";
+	var JOIN_KEY = "luanti.join";
+	// The public server list, the same one the game's own menu reads. It allows
+	// any origin, and it is what stands in for that menu, whose list needs HTTP
+	// support this build leaves out.
+	var SERVER_LIST = "https://servers.minetest.net/list";
+	var MAX_SERVERS = 40;
+
+	// The public gateways a web client reaches servers through, since a page
+	// cannot open a TCP connection. Europe first: this page is served from
+	// France, and the one the port defaults to is in California.
+	var PROXIES = [
+		["wss://eu1.dustlabs.io/mtproxy", "Europe (Francfort)"],
+		["wss://luanti.dustlabs.io/proxy", "États-Unis (Californie)"],
+		["wss://na1.dustlabs.io/mtproxy", "États-Unis (Dallas)"],
+		["wss://sa1.dustlabs.io/mtproxy", "Amérique du Sud (São Paulo)"],
+		["wss://ap1.dustlabs.io/mtproxy", "Asie (Singapour)"],
+		["wss://ap2.dustlabs.io/mtproxy", "Australie (Melbourne)"]
+	];
+
 	var els = {
 		launcher: document.getElementById("launcher"),
 		storage: document.getElementById("storage"),
@@ -30,12 +51,21 @@
 		noWorlds: document.getElementById("no-worlds"),
 		games: document.getElementById("games"),
 		noGames: document.getElementById("no-games"),
+		joinAddress: document.getElementById("join-address"),
+		joinPort: document.getElementById("join-port"),
+		joinName: document.getElementById("join-name"),
+		joinPassword: document.getElementById("join-password"),
+		joinButton: document.getElementById("join"),
+		browseButton: document.getElementById("browse"),
+		servers: document.getElementById("servers"),
+		proxy: document.getElementById("proxy"),
 		drop: document.getElementById("drop")
 	};
 
 	var state = {
 		games: [],
 		worlds: [],
+		servers: [],
 		selected: null,
 		busy: false
 	};
@@ -125,6 +155,23 @@
 			values[match[1].toLowerCase()] = value;
 		});
 		return values;
+	}
+
+	function remember(key, value) {
+		try {
+			localStorage.setItem(key, value);
+		} catch (err) {
+			// Private browsing: the choice just is not remembered.
+		}
+	}
+
+	function remembered(key, fallback) {
+		try {
+			var value = localStorage.getItem(key);
+			return value === null ? fallback : value;
+		} catch (err) {
+			return fallback;
+		}
 	}
 
 	function gameById(id) {
@@ -631,6 +678,157 @@
 	}
 
 	/////////////////////////////////////////////////////////////////////////
+	// Joining a server
+	/////////////////////////////////////////////////////////////////////////
+
+	function setupJoin() {
+		PROXIES.forEach(function (proxy) {
+			var option = el("option", null, proxy[1]);
+			option.value = proxy[0];
+			els.proxy.appendChild(option);
+		});
+		els.proxy.value = remembered(PROXY_KEY, PROXIES[0][0]) || PROXIES[0][0];
+		els.proxy.addEventListener("change", function () {
+			remember(PROXY_KEY, els.proxy.value);
+		});
+
+		var last = null;
+		try {
+			last = JSON.parse(remembered(JOIN_KEY, ""));
+		} catch (err) {
+			last = null;
+		}
+		if (last) {
+			els.joinAddress.value = last.address || "";
+			els.joinPort.value = last.port || "30000";
+			els.joinName.value = last.name || "";
+		}
+
+		els.joinButton.addEventListener("click", function () {
+			joinServer(els.joinAddress.value, els.joinPort.value,
+					els.joinName.value, els.joinPassword.value);
+		});
+		els.browseButton.addEventListener("click", toggleServers);
+	}
+
+	// `address` may be "host:port" as much as a bare host, which is what a
+	// server's own page tells people to type.
+	function joinServer(address, port, name, password) {
+		if (state.busy)
+			return;
+		address = String(address || "").trim();
+		port = String(port || "").trim();
+		name = String(name || "").trim();
+		var hostPort = /^(.*):(\d+)$/.exec(address);
+		if (hostPort && !port) {
+			address = hostPort[1];
+			port = hostPort[2];
+		}
+		if (!address) {
+			message("Indiquez l'adresse du serveur.", true);
+			els.joinAddress.focus();
+			return;
+		}
+		if (!name) {
+			message("Choisissez un nom de joueur avant de rejoindre.", true);
+			els.joinName.focus();
+			return;
+		}
+		remember(JOIN_KEY, JSON.stringify({ address: address, port: port, name: name }));
+		// --go skips the game's own menu, which is where a player would
+		// otherwise have to type this all again.
+		var args = ["luanti", "--go", "--address", address, "--name", name];
+		if (port)
+			args.push("--port", port);
+		if (password)
+			args.push("--password", password);
+		message("Connexion à " + address + (port ? ":" + port : "") + "…");
+		global.Luanti.play(args, "", els.proxy.value);
+	}
+
+	function toggleServers() {
+		if (!els.servers.hidden) {
+			els.servers.hidden = true;
+			els.browseButton.textContent = "Serveurs publics";
+			return;
+		}
+		els.servers.hidden = false;
+		els.browseButton.textContent = "Masquer les serveurs";
+		if (state.servers.length) {
+			renderServers();
+			return;
+		}
+		message("Chargement de la liste des serveurs…");
+		fetch(SERVER_LIST, { cache: "no-store" }).then(function (response) {
+			if (!response.ok)
+				throw new Error(response.status + " " + response.statusText);
+			return response.json();
+		}).then(function (data) {
+			state.servers = pickServers(data);
+			renderServers();
+			message(state.servers.length ? "" : "Aucun serveur libre pour l'instant.",
+					!state.servers.length);
+		}, function (err) {
+			// The list is a convenience: joining an address you know still works
+			// without it.
+			message("La liste des serveurs n'a pas pu être chargée : " + err.message, true);
+		});
+	}
+
+	// The public list, minus the servers a web client cannot join (a password)
+	// or would only queue for (full), busiest first.
+	function pickServers(data) {
+		var list = (data && data.servers) || [];
+		var servers = [];
+		for (var i = 0; i < list.length; i++) {
+			var server = list[i];
+			if (!server || !server.address || server.password)
+				continue;
+			var clients = server.clients || 0;
+			var max = server.clients_max || 0;
+			if (max && clients >= max)
+				continue;
+			servers.push({
+				address: server.address,
+				port: server.port || 30000,
+				name: server.name || server.address,
+				clients: clients,
+				max: max,
+				ping: server.ping,
+				game: server.gameid || ""
+			});
+		}
+		servers.sort(function (a, b) {
+			return b.clients - a.clients;
+		});
+		return servers.slice(0, MAX_SERVERS);
+	}
+
+	function renderServers() {
+		els.servers.textContent = "";
+		state.servers.forEach(function (server) {
+			var card = el("article", "card");
+			card.appendChild(el("span", "card-title", server.name));
+			var meta = [server.max ? server.clients + "/" + server.max + " joueurs"
+					: server.clients + " joueurs"];
+			if (server.ping)
+				meta.push(server.ping + " ms");
+			if (server.game)
+				meta.push(server.game);
+			card.appendChild(el("span", "card-meta", meta.join(" · ")));
+			var actions = el("div", "card-actions");
+			actions.appendChild(button("Rejoindre", "primary small", function () {
+				els.joinAddress.value = server.address;
+				els.joinPort.value = String(server.port);
+				joinServer(server.address, server.port, els.joinName.value,
+						els.joinPassword.value);
+			}));
+			card.appendChild(actions);
+			els.servers.appendChild(card);
+		});
+	}
+
+	/////////////////////////////////////////////////////////////////////////
 	// What the engine reports while it works
 	/////////////////////////////////////////////////////////////////////////
 
@@ -669,6 +867,7 @@
 		shown = true;
 		attachHooks();
 		attachDrop();
+		setupJoin();
 		els.newGame.addEventListener("click", newGame);
 		els.importButton.addEventListener("click", pickFile);
 		message("");
