@@ -25,6 +25,11 @@
 
 	var PACKS_FILE = "packs.json";
 
+	// The OPFS directory the module mounts at /luanti. See
+	// emsdk_wasmfs_opfs_subdir.patch: paths in persistent storage are the paths
+	// the program sees, below this one.
+	var ROOT_DIR = "luanti";
+
 	var DEFAULT_PACKS = {
 		base: { file: "base.zip", version: "" },
 		game: { file: "games.zip", name: "minetest_game", version: "" }
@@ -366,6 +371,26 @@
 		});
 	}
 
+	// The engine opens two things at the top of its tree as it starts, through a
+	// path that goes by a folder it expects to exist: the log file it writes to
+	// (see --logfile in play(), which turns that off) and minetest.conf, which it
+	// rewrites whenever a setting changes. Making them here, where the page can,
+	// means the engine finds an existing file rather than having to create one at
+	// the root of the mount.
+	function prepareStorage() {
+		if (!navigator.storage || !navigator.storage.getDirectory)
+			return Promise.resolve();
+		return navigator.storage.getDirectory().then(function (root) {
+			return root.getDirectoryHandle(ROOT_DIR, { create: true });
+		}).then(function (dir) {
+			return dir.getDirectoryHandle("bin", { create: true }).then(function () {
+				return dir.getFileHandle("minetest.conf", { create: true });
+			});
+		}).catch(function (err) {
+			console.warn("[launcher] préparation du stockage :", err);
+		});
+	}
+
 	function start() {
 		say("Préparation du stockage…");
 		var fs = wait("fs", "Préparation du stockage");
@@ -377,6 +402,8 @@
 			Luanti.persistent = persistent;
 			if (!persistent)
 				say("Ce navigateur ne donne pas de stockage : rien ne sera gardé.");
+			return prepareStorage();
+		}).then(function () {
 			return loadPacks();
 		}).then(function (packs) {
 			Luanti.packs = packs;
@@ -410,7 +437,10 @@
 			if (proxy)
 				setProxy(proxy);
 			fitCanvas();
-			invokeMain(args);
+			// No debug.txt. A page's log belongs in its console, which is where
+			// everything the engine prints already goes, and the file was the one
+			// thing a fresh mount would not let it create.
+			invokeMain(args.concat(["--logfile", ""]));
 		} catch (err) {
 			fail(err);
 		}
