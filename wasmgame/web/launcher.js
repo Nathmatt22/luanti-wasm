@@ -30,6 +30,14 @@
 	// the program sees, below this one.
 	var ROOT_DIR = "luanti";
 
+	// A query on this page (`?b=anything`) is passed on to luanti.js and
+	// luanti.wasm, so that a browser or a proxy holding on to them can be made
+	// to fetch them again without renaming the files. Empty otherwise.
+	var BUILD = (function () {
+		var match = /[?&]b=([^&#]*)/.exec(location.search || "");
+		return match ? "?b=" + match[1] : "";
+	})();
+
 	var DEFAULT_PACKS = {
 		base: { file: "base.zip", version: "" },
 		game: { file: "games.zip", name: "minetest_game", version: "" }
@@ -52,6 +60,7 @@
 	var bootPanel = document.getElementById("boot");
 	var menuPanel = document.getElementById("menu");
 	var statusLine = document.getElementById("status");
+	var engineLine = document.getElementById("engine");
 	var bar = document.querySelector("#bar > div");
 	var errorBox = document.getElementById("error");
 	var restartButton = document.getElementById("restart");
@@ -278,7 +287,7 @@
 
 	var Module = window.Module = {
 		canvas: canvas,
-		locateFile: function (path) { return path; },
+		locateFile: function (path) { return path + BUILD; },
 		print: function (line) { console.log(line); },
 		printErr: function (line) { console.warn(line); engineSaid(line); },
 		setStatus: function (text) { if (text) say(text); },
@@ -533,7 +542,36 @@
 		});
 	}
 
+	// What the engine this page loaded can do. A luanti.wasm kept in the
+	// browser's cache, or an older artifact copied over the files, is not the
+	// build the page was written against; saying which one is running turns a
+	// game that stops at its first `goto` into a message that names the real
+	// problem.
+	function showEngine() {
+		if (!engineLine)
+			return;
+		var supported = null;  /* null: a build from before this check existed */
+		try {
+			supported = number("emloop_lua_goto_supported", [], []) === 1;
+		} catch (err) {
+			supported = null;
+		}
+		if (supported === true) {
+			engineLine.textContent = "Moteur à jour : Lua 5.1 avec goto.";
+			engineLine.style.color = "";
+			return;
+		}
+		engineLine.textContent = "Ce n'est pas le dernier moteur ("
+				+ (supported === false ? "il n'accepte pas goto"
+					: "il ne connaît pas cette vérification")
+				+ ") : remplacez luanti.js et luanti.wasm par ceux de la dernière "
+				+ "archive, puis rechargez la page — avec ?b=1 au bout de l'adresse "
+				+ "si le navigateur garde les anciens.";
+		engineLine.style.color = "var(--danger)";
+	}
+
 	function start() {
+		showEngine();
 		say("Préparation du stockage…");
 		var fs = wait("fs", "Préparation du stockage");
 		// Storage the page keeps between visits, where the engine writes
@@ -724,7 +762,7 @@
 	});
 
 	var script = document.createElement("script");
-	script.src = "luanti.js";
+	script.src = "luanti.js" + BUILD;
 	script.async = true;
 	script.onerror = function () {
 		fail("luanti.js n'a pas pu être chargé. Vérifiez qu'il est à côté de cette page.");

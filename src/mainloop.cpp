@@ -22,6 +22,8 @@
 #include <thread>
 #include <vector>
 #include <emsocketctl.h>
+#include <lua.h>
+#include <lauxlib.h>
 
 #include <cstring>
 #include <exception>
@@ -165,6 +167,13 @@ extern "C" {
     // Answers asynchronously with emloop_conf_written().
     EMSCRIPTEN_KEEPALIVE
     void emloop_write_conf(const char *text);
+
+    // Whether this build's Lua takes `goto` and labels (see lib/lua). The page
+    // asks so that a luanti.wasm left over from an older build says so,
+    // instead of looking like a game that fails at its first `goto` with
+    // "'=' expected near <label>".
+    EMSCRIPTEN_KEEPALIVE
+    int emloop_lua_goto_supported();
 
     // Keys pressed in the page's terminal, as the bytes a tty would deliver.
     // See the terminal section below.
@@ -1835,6 +1844,24 @@ void emloop_read_conf() {
             emloop_conf_read(UTF8ToString($0));
         }, text.c_str());
     });
+}
+
+int emloop_lua_goto_supported() {
+    static int supported = -1;
+    if (supported < 0) {
+        supported = 0;
+        // A state of its own, compiled and thrown away: what the engine does
+        // with the game's scripts is not touched, and this works before the
+        // game has started.
+        lua_State *L = luaL_newstate();
+        if (L) {
+            static const char chunk[] = "goto label_1 ::label_1::";
+            if (luaL_loadbuffer(L, chunk, sizeof(chunk) - 1, "goto") == 0)
+                supported = 1;
+            lua_close(L);
+        }
+    }
+    return supported;
 }
 
 void emloop_write_conf(const char *text) {
