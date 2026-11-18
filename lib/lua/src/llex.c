@@ -429,12 +429,14 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           read_numeral(ls, seminfo);
           return TK_NUMBER;
         }
-        else if (isalpha(ls->current) || ls->current == '_') {
+        else if (ls->current >= 0x80 || isalpha(ls->current) ||
+                 ls->current == '_') {
           /* identifier or reserved word */
           TString *ts;
           do {
             save_and_next(ls);
-          } while (isalnum(ls->current) || ls->current == '_');
+          } while (ls->current >= 0x80 || isalnum(ls->current) ||
+                   ls->current == '_');
           ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
                                   luaZ_bufflen(ls->buff));
           if (ts->tsv.reserved > 0)  /* reserved word? */

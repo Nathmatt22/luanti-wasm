@@ -175,6 +175,13 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
     int emloop_lua_goto_supported();
 
+    // Whether this build's Lua takes a name made of bytes 0x80-0xFF, as
+    // LuaJIT does and an obfuscated script relies on (see lib/lua). Asked for
+    // the same reason as the one above: it is what tells a wasm that was not
+    // replaced from the game's own syntax error.
+    EMSCRIPTEN_KEEPALIVE
+    int emloop_lua_raw_names_supported();
+
     // Keys pressed in the page's terminal, as the bytes a tty would deliver.
     // See the terminal section below.
     EMSCRIPTEN_KEEPALIVE
@@ -1857,6 +1864,23 @@ int emloop_lua_goto_supported() {
         if (L) {
             static const char chunk[] = "goto label_1 ::label_1::";
             if (luaL_loadbuffer(L, chunk, sizeof(chunk) - 1, "goto") == 0)
+                supported = 1;
+            lua_close(L);
+        }
+    }
+    return supported;
+}
+
+int emloop_lua_raw_names_supported() {
+    static int supported = -1;
+    if (supported < 0) {
+        supported = 0;
+        lua_State *L = luaL_newstate();
+        if (L) {
+            // Two bytes a LuaJIT name may hold; upstream 5.1 stops here with
+            // "unexpected symbol near '\xCE'".
+            static const char chunk[] = "\xCE" "\x90 = 1";
+            if (luaL_loadbuffer(L, chunk, sizeof(chunk) - 1, "names") == 0)
                 supported = 1;
             lua_close(L);
         }

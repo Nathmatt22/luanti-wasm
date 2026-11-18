@@ -14,3 +14,9 @@ blocks inside it, a goto may jump forward or backward to one, jumping into the
 scope of a local is an error, and a goto that leaves a block holding an upvalue
 closes it on the way. `OP_JMP` carries the level to close in its unused `A`
 field, so jumps made by anything else are unaffected.
+
+A byte from 0x80 to 0xFF may start and continue a name, in `llex.c`. LuaJIT
+hands non-ASCII source to its parser transparently, so a name may be a run of
+such bytes, and an obfuscated script uses exactly that: `{ \226\144 = "i" }`
+is a table key there. Upstream 5.1 accepts only `isalpha()` and `_`, which
+stops on the first such byte with `unexpected symbol near '<byte>'`.

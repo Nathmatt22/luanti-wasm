@@ -547,23 +547,33 @@
 	// build the page was written against; saying which one is running turns a
 	// game that stops at its first `goto` into a message that names the real
 	// problem.
+	function supports(name) {
+		try {
+			return number(name, [], []) === 1;
+		} catch (err) {
+			return null;  /* a build from before this check existed */
+		}
+	}
+
 	function showEngine() {
 		if (!engineLine)
 			return;
-		var supported = null;  /* null: a build from before this check existed */
-		try {
-			supported = number("emloop_lua_goto_supported", [], []) === 1;
-		} catch (err) {
-			supported = null;
-		}
-		if (supported === true) {
-			engineLine.textContent = "Moteur à jour : Lua 5.1 avec goto.";
+		var goto_ok = supports("emloop_lua_goto_supported");
+		var names_ok = supports("emloop_lua_raw_names_supported");
+		if (goto_ok === true && names_ok === true) {
+			engineLine.textContent = "Moteur à jour : Lua 5.1 avec goto et noms "
+					+ "non-ASCII.";
 			engineLine.style.color = "";
 			return;
 		}
-		engineLine.textContent = "Ce n'est pas le dernier moteur ("
-				+ (supported === false ? "il n'accepte pas goto"
-					: "il ne connaît pas cette vérification")
+		var missing;
+		if (goto_ok === false)
+			missing = "il n'accepte pas goto";
+		else if (names_ok === false)
+			missing = "il n'accepte pas les noms en octets non-ASCII";
+		else
+			missing = "il ne connaît pas cette vérification";
+		engineLine.textContent = "Ce n'est pas le dernier moteur (" + missing
 				+ ") : remplacez luanti.js et luanti.wasm par ceux de la dernière "
 				+ "archive, puis rechargez la page — avec ?b=1 au bout de l'adresse "
 				+ "si le navigateur garde les anciens.";
