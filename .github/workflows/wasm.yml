@@ -103,12 +103,9 @@ jobs:
           # Emscripten only exports the heap views when they are asked for.
           sed -i 's/EXPORTED_RUNTIME_METHODS=ccall,cwrap/EXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32/' build_luanti.sh
           sed -i 's/-DENABLE_UPDATE_CHECKER=0/-DENABLE_UPDATE_CHECKER=0 -DENABLE_CURL=FALSE -DBUILD_UNITTESTS=FALSE/' build_luanti.sh
-          # TEMPORARY, with the worker-side stack below: keep the wasm function
-          # names, so a stack reads as a C++ function and not as an index.
-          sed -i 's/^export LDFLAGS="/export LDFLAGS="--profiling-funcs /' build_luanti.sh
-          if ! grep -q '^export LDFLAGS="--profiling-funcs ' build_luanti.sh; then
-            echo "::warning::--profiling-funcs was not added to LDFLAGS: the stack will name function indices"
-          fi
+          # No extra linker flag here: CMake's compile checks run with LDFLAGS,
+          # and an Emscripten-only flag makes them fail (it once read as "SDL2
+          # is too old").  The wasm keeps its name section without one.
           if ! grep -q 'DIAG main thread heartbeat' sources/luanti/src/server.cpp; then
             echo "::warning::the heartbeat is not in server.cpp"
           fi
