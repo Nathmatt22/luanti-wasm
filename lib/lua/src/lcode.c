@@ -182,6 +182,24 @@ void luaK_patchtohere (FuncState *fs, int list) {
 }
 
 
+/*
+** Patch the jumps in `list' so that they close the upvalues of the locals
+** above `level' before jumping. OP_JMP has an A field it does not otherwise
+** use, so the level goes there and the interpreter does the closing (see
+** lvm.c); this is what a goto that leaves a block holding an upvalue needs,
+** as the OP_CLOSE the block would have emitted is jumped over.
+*/
+void luaK_patchclose (FuncState *fs, int list, int level) {
+  level++;  /* the argument is +1 so that 0 means `no closing' */
+  for (; list != NO_JUMP; list = getjump(fs, list)) {
+    lua_assert(GET_OPCODE(fs->f->code[list]) == OP_JMP &&
+                (GETARG_A(fs->f->code[list]) == 0 ||
+                 GETARG_A(fs->f->code[list]) >= level));
+    SETARG_A(fs->f->code[list], level);
+  }
+}
+
+
 void luaK_concat (FuncState *fs, int *l1, int l2) {
   if (l2 == NO_JUMP) return;
   else if (*l1 == NO_JUMP)

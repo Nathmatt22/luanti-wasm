@@ -51,6 +51,27 @@ typedef struct upvaldesc {
 } upvaldesc;
 
 
+/*
+** A label (`::name::`) or a pending `goto name`, as Lua 5.2 has them: a goto
+** keeps the list of active locals it was written among, which is what tells
+** a jump into the scope of a local from a legal one.
+*/
+typedef struct Labeldesc {
+  TString *name;  /* label identifier */
+  int pc;  /* position in code */
+  int line;  /* line where it appeared */
+  lu_byte nactvar;  /* local level where it appears in current block */
+} Labeldesc;
+
+
+/* list of labels or gotos */
+typedef struct Labellist {
+  Labeldesc *arr;  /* array */
+  int n;  /* number of entries in use */
+  int size;  /* array size */
+} Labellist;
+
+
 struct BlockCnt;  /* defined in lparser.c */
 
 
@@ -70,6 +91,8 @@ typedef struct FuncState {
   int np;  /* number of elements in `p' */
   short nlocvars;  /* number of elements in `locvars' */
   lu_byte nactvar;  /* number of active local variables */
+  Labellist gt;  /* list of pending gotos */
+  Labellist label;  /* list of active labels */
   upvaldesc upvalues[LUAI_MAXUPVALUES];  /* upvalues */
   unsigned short actvar[LUAI_MAXVARS];  /* declared-variable stack */
 } FuncState;

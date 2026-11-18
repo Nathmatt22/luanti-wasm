@@ -539,6 +539,11 @@ void luaV_execute (lua_State *L, int nexeccalls) {
         continue;
       }
       case OP_JMP: {
+        int a = GETARG_A(i);
+        /* a jump out of a block closes the upvalues of the locals it leaves
+           behind (see luaK_patchclose) */
+        if (a > 0)
+          luaF_close(L, base + a - 1);
         dojump(L, pc, GETARG_sBx(i));
         continue;
       }

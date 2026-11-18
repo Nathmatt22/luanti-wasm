@@ -35,10 +35,10 @@
 /* ORDER RESERVED */
 const char *const luaX_tokens [] = {
     "and", "break", "do", "else", "elseif",
-    "end", "false", "for", "function", "if",
+    "end", "false", "for", "function", "goto", "if",
     "in", "local", "nil", "not", "or", "repeat",
     "return", "then", "true", "until", "while",
-    "..", "...", "==", ">=", "<=", "~=",
+    "..", "...", "==", ">=", "<=", "~=", "::",
     "<number>", "<name>", "<string>", "<eof>",
     NULL
 };
@@ -363,6 +363,11 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         while (!currIsNewline(ls) && ls->current != EOZ)
           next(ls);
         continue;
+      }
+      case ':': {
+        next(ls);
+        if (ls->current != ':') return ':';
+        else { next(ls); return TK_DBCOLON; }  /* start or end of a label */
       }
       case '[': {
         int sep = skip_sep(ls);
