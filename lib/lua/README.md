@@ -21,6 +21,16 @@ such bytes, and an obfuscated script uses exactly that: `{ \226\144 = "i" }`
 is a table key there. Upstream 5.1 accepts only `isalpha()` and `_`, which
 stops on the first such byte with `unexpected symbol near '<byte>'`.
 
+A C closure can carry a null function pointer, and `ldo.c` calls it through
+the wrapper (`lua_atccall`) without looking.  On a desktop the two are the
+same instruction and the game either works or takes a segmentation fault,
+which a debugger explains; on the web port the call is an indirect one through
+the function table, so null arrives as a wasm trap: `RuntimeError: null
+function`, thrown in a worker, with no stack and with the engine left waiting
+on it — the log simply stops.  The call now raises `attempt to call a null C
+function`, which the error handler reports with the traceback that names the
+mod and the line.
+
 `\xXX` in a string is one byte, as LuaJIT and Lua 5.2 read it, in `llex.c`.
 Upstream 5.1 does not fail on it: it throws the backslash away and keeps the
 `x`, so `"\xAD"` is three characters there and one here. That is silent, and

@@ -316,6 +316,15 @@ int luaD_precall (lua_State *L, StkId func, int nresults) {
     if (L->hookmask & LUA_MASKCALL)
       luaD_callhook(L, LUA_HOOKCALL, -1);
     lua_unlock(L);
+    /* MINETEST-SPECIFIC CHANGE: A C closure can carry a null function pointer
+       (an API that was pushed but never implemented).  Calling it through the
+       wrapper below dereferences null, and on the web port that kills the
+       thread with a bare "null function" and no way to tell which script did
+       it.  Raise an ordinary Lua error instead: it names the mod and the line. */
+    if (curr_func(L)->c.f == NULL) {
+      lua_lock(L);
+      luaG_runerror(L, "attempt to call a null C function");
+    }
     /* MINETEST-SPECIFIC CHANGE: Let custom code wrap C function calls. */
     if (G(L)->wrapcf)
       n = G(L)->wrapcf(L, *curr_func(L)->c.f);
