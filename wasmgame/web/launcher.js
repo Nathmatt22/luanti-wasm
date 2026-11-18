@@ -560,9 +560,10 @@
 			return;
 		var goto_ok = supports("emloop_lua_goto_supported");
 		var names_ok = supports("emloop_lua_raw_names_supported");
-		if (goto_ok === true && names_ok === true) {
-			engineLine.textContent = "Moteur à jour : Lua 5.1 avec goto et noms "
-					+ "non-ASCII.";
+		var escapes_ok = supports("emloop_lua_hex_escapes_supported");
+		if (goto_ok === true && names_ok === true && escapes_ok === true) {
+			engineLine.textContent = "Moteur à jour : Lua 5.1 avec goto, noms "
+					+ "non-ASCII et \\xNN.";
 			engineLine.style.color = "";
 			return;
 		}
@@ -571,6 +572,8 @@
 			missing = "il n'accepte pas goto";
 		else if (names_ok === false)
 			missing = "il n'accepte pas les noms en octets non-ASCII";
+		else if (escapes_ok === false)
+			missing = "il ne lit pas \\xNN comme un octet";
 		else
 			missing = "il ne connaît pas cette vérification";
 		engineLine.textContent = "Ce n'est pas le dernier moteur (" + missing

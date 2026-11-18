@@ -182,6 +182,13 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
     int emloop_lua_raw_names_supported();
 
+    // Whether a string's `\xXX` is one byte here, as it is under LuaJIT. 5.1
+    // compiles it either way, but reads it as `xXX`, which quietly shortens
+    // nothing and lengthens everything: a game's ChaCha20 nonce came out at
+    // 24 bytes instead of 12.
+    EMSCRIPTEN_KEEPALIVE
+    int emloop_lua_hex_escapes_supported();
+
     // Keys pressed in the page's terminal, as the bytes a tty would deliver.
     // See the terminal section below.
     EMSCRIPTEN_KEEPALIVE
@@ -1881,6 +1888,23 @@ int emloop_lua_raw_names_supported() {
             // "unexpected symbol near '\xCE'".
             static const char chunk[] = "\xCE" "\x90 = 1";
             if (luaL_loadbuffer(L, chunk, sizeof(chunk) - 1, "names") == 0)
+                supported = 1;
+            lua_close(L);
+        }
+    }
+    return supported;
+}
+
+int emloop_lua_hex_escapes_supported() {
+    static int supported = -1;
+    if (supported < 0) {
+        supported = 0;
+        lua_State *L = luaL_newstate();
+        if (L) {
+            // Compiled by both, so it has to be run: 5.1 answers "x41".
+            static const char chunk[] = "return \"\\x41\" == \"A\"";
+            if (luaL_loadbuffer(L, chunk, sizeof(chunk) - 1, "escapes") == 0 &&
+                    lua_pcall(L, 0, 1, 0) == 0 && lua_toboolean(L, -1))
                 supported = 1;
             lua_close(L);
         }

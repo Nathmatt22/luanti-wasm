@@ -20,3 +20,9 @@ hands non-ASCII source to its parser transparently, so a name may be a run of
 such bytes, and an obfuscated script uses exactly that: `{ \226\144 = "i" }`
 is a table key there. Upstream 5.1 accepts only `isalpha()` and `_`, which
 stops on the first such byte with `unexpected symbol near '<byte>'`.
+
+`\xXX` in a string is one byte, as LuaJIT and Lua 5.2 read it, in `llex.c`.
+Upstream 5.1 does not fail on it: it throws the backslash away and keeps the
+`x`, so `"\xAD"` is three characters there and one here. That is silent, and
+it is what broke an obfuscated game's ChaCha20 nonce — twelve bytes expected,
+`invalid IV size: 24B` obtained — long before any syntax error could name it.

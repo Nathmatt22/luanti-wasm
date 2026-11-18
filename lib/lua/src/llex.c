@@ -305,6 +305,20 @@ static void read_string (LexState *ls, int del, SemInfo *seminfo) {
           case '\n':  /* go through */
           case '\r': save(ls, '\n'); inclinenumber(ls); continue;
           case EOZ: continue;  /* will raise an error next loop */
+          case 'x': {  /* \xXX, as LuaJIT and Lua 5.2 read it */
+            int i;
+            c = 0;
+            next(ls);  /* skip the `x' */
+            for (i = 0; i < 2; i++) {
+              if (!isxdigit(ls->current))
+                luaX_lexerror(ls, "hexadecimal digit expected", TK_STRING);
+              c = 16*c + (isdigit(ls->current) ? ls->current - '0'
+                          : (tolower(ls->current) - 'a') + 10);
+              next(ls);
+            }
+            save(ls, c);
+            continue;
+          }
           default: {
             if (!isdigit(ls->current))
               save_and_next(ls);  /* handles \\, \", \', and \? */
