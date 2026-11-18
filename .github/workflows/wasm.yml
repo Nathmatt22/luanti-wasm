@@ -176,17 +176,26 @@ jobs:
             exit 1
           fi
           # The target sits in src/, so the link file is
-          # <cmake binary dir>/src/CMakeFiles/luanti.dir/link.txt and its paths
-          # are relative to that binary dir, not to src/.
-          base=$(cd "$(dirname "$link")/../../.." && pwd)
-          echo "::warning::relink: link=$link base=$base"
-          if ( cd "$base" && eval "$(cat "$link") --emit-symbol-map" ) \
-                 > /tmp/relink.log 2>&1; then
-            echo "::warning::relink: ok $(ls -l "$base/bin/luanti.js.symbols" 2>/dev/null || echo 'no symbol file')"
-          else
-            echo "::warning::relink failed: $(tail -n 6 /tmp/relink.log | tr '\n' ' ')"
-            exit 1
-          fi
+          # <binary dir>/src/CMakeFiles/luanti.dir/link.txt and its object paths
+          # are relative to src/, not to the binary dir.  Both are tried, since
+          # only the build itself knows which one the link expects.
+          srcdir=$(cd "$(dirname "$link")/.." && pwd)
+          topdir=$(cd "$srcdir/../.." && pwd)
+          echo "::warning::relink: link=$link srcdir=$srcdir topdir=$topdir"
+          for d in "$srcdir" "$topdir"; do
+            if ( cd "$d" && eval "$(cat "$link") --emit-symbol-map" ) \
+                   > /tmp/relink.log 2>&1; then
+              sym=$(find "$topdir" -maxdepth 3 -name 'luanti.js.symbols' -print -quit)
+              if [ -n "$sym" ] && [ "$(dirname "$sym")" != "$topdir/bin" ]; then
+                mkdir -p "$topdir/bin"
+                cp "$sym" "$topdir/bin/luanti.js.symbols"
+              fi
+              echo "::warning::relink ok in $d: $(ls -l "$topdir/bin/luanti.js.symbols" 2>/dev/null || echo 'no symbol file')"
+              exit 0
+            fi
+            echo "::warning::relink failed in $d: $(tail -n 2 /tmp/relink.log | tr '\n' ' ')"
+          done
+          exit 1
 
       - name: Keep the stack of a worker's error, for the crash no log explains
         working-directory: port
