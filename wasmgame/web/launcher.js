@@ -73,10 +73,15 @@
 	function stop() {
 		launcher.classList.remove("hidden");
 		document.body.classList.remove("playing");
+		// Back at the launcher, where the game is not on screen any more: what
+		// goes wrong from here on is worth putting in front of the player
+		// again, even if they had put the panel away during a game.
+		logPutAway = false;
 	}
 
 	function fail(what) {
 		console.error("[launcher]", what);
+		note("Launcher : " + (what && what.message ? what.message : String(what)), true);
 		stop();
 		bootPanel.hidden = false;
 		menuPanel.hidden = true;
@@ -88,6 +93,126 @@
 	}
 
 	restartButton.addEventListener("click", function () { location.reload(); });
+
+	/////////////////////////////////////////////////////////////////////////
+	// What went wrong, on the page
+	/////////////////////////////////////////////////////////////////////////
+
+	// The engine reports its errors and warnings on stderr, which a page by
+	// default only ever shows in the browser's console — and a phone has no
+	// console to open. They are kept here and put on the page as they arrive.
+	// The last few hundred lines are kept and older ones go, so that a long
+	// session cannot grow without bound.
+	var LOG_MAX = 300;
+	var logLines = [];
+	var logBox = document.getElementById("log-box");
+	var logText = document.getElementById("log");
+	var logTitle = document.getElementById("log-title");
+	// Set once the player has put the panel away: a screen of game should not
+	// be covered again by an error of the kind it has already seen. A crash
+	// still opens it.
+	var logPutAway = false;
+
+	function paintLog() {
+		if (!logText)
+			return;
+		logText.textContent = logLines.join("\n");
+		logText.scrollTop = logText.scrollHeight;
+	}
+
+	function showLog(why, force) {
+		if (!logBox || (logPutAway && !force))
+			return;
+		if (logTitle && why)
+			logTitle.textContent = why;
+		logBox.hidden = false;
+		paintLog();
+	}
+
+	function hideLog() {
+		if (logBox)
+			logBox.hidden = true;
+		logPutAway = true;
+	}
+
+	// A line from the engine, or from the page itself. It is kept whatever it
+	// says; `serious` is what decides whether it is also put in front of the
+	// player.
+	function note(line, serious) {
+		line = String(line == null ? "" : line);
+		if (!line)
+			return;
+		logLines.push(line);
+		if (logLines.length > LOG_MAX)
+			logLines.splice(0, logLines.length - LOG_MAX);
+		if (serious)
+			showLog("Erreur");
+		else if (logBox && !logBox.hidden)
+			paintLog();
+	}
+
+	// Luanti prefixes a real problem with ERROR (WARNING is not one), and an
+	// aborted wasm instance says so in its own words.
+	function isError(line) {
+		return /^(ERROR|ALERT|EMERG|CRIT)\b|Assertion|unreachable|Aborted/.test(line);
+	}
+
+	function engineSaid(line) {
+		note(line, isError(String(line)));
+	}
+
+	function copyLog() {
+		var text = logLines.join("\n");
+		if (!text)
+			return;
+		var button = document.getElementById("log-copy");
+		var done = function () {
+			if (!button)
+				return;
+			button.textContent = "Copié";
+			setTimeout(function () { button.textContent = "Copier"; }, 1500);
+		};
+		if (navigator.clipboard && navigator.clipboard.writeText)
+			navigator.clipboard.writeText(text).then(done, selectLog);
+		else
+			selectLog();
+	}
+
+	// Without the clipboard API (an unencrypted origin, an older browser):
+	// leave the text selected, which is what Ctrl-C and the share sheet copy.
+	function selectLog() {
+		if (!logText || !document.createRange || !window.getSelection)
+			return;
+		var range = document.createRange();
+		range.selectNodeContents(logText);
+		var selection = window.getSelection();
+		selection.removeAllRanges();
+		selection.addRange(range);
+	}
+
+	if (logBox) {
+		logBox.hidden = true;
+		var logCloseButton = document.getElementById("log-close");
+		var logCopyButton = document.getElementById("log-copy");
+		if (logCloseButton)
+			logCloseButton.addEventListener("click", hideLog);
+		if (logCopyButton)
+			logCopyButton.addEventListener("click", copyLog);
+	}
+
+	// A script error, or a promise nobody caught: both would otherwise only
+	// ever reach the console.
+	window.addEventListener("error", function (event) {
+		var where = event && event.filename
+				? " (" + event.filename + ":" + event.lineno + ")"
+				: "";
+		note("Page : " + ((event && event.message) || "erreur inconnue") + where, true);
+	});
+	window.addEventListener("unhandledrejection", function (event) {
+		var reason = event && event.reason;
+		var what = reason && reason.message ? reason.message : String(reason);
+		note("Page : promesse rejetée : " + what, true);
+	});
 
 	/////////////////////////////////////////////////////////////////////////
 	// Waiting on the module's answers
@@ -155,7 +280,7 @@
 		canvas: canvas,
 		locateFile: function (path) { return path; },
 		print: function (line) { console.log(line); },
-		printErr: function (line) { console.warn(line); },
+		printErr: function (line) { console.warn(line); engineSaid(line); },
 		setStatus: function (text) { if (text) say(text); },
 		onAbort: function (what) { fail("Le moteur s'est arrêté : " + what); },
 		onFullScreen: function (want) {
@@ -216,8 +341,10 @@
 		statusLine.textContent = code === 0 ? "Le jeu est fermé." : "Le jeu s'est arrêté.";
 		progress(1);
 		if (code !== 0) {
-			errorBox.textContent = "Le détail est dans la console du navigateur (F12).";
+			errorBox.textContent = "Le jeu s'est arrêté (code " + code + "). Les "
+					+ "derniers messages du moteur sont affichés en bas de la page.";
 			errorBox.classList.add("shown");
+			showLog("Le jeu s'est arrêté", true);
 		}
 		restartButton.textContent = "Revenir au launcher";
 		restartButton.hidden = false;

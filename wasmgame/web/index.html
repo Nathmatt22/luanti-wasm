@@ -146,6 +146,60 @@
 		font: 400 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
 	}
 	#error.shown { display: block; }
+
+	/* What the engine reports as wrong, over the canvas: a phone has no
+	   console to open, and a failure should be readable where it happened. */
+	#log-box {
+		position: fixed;
+		left: 1rem;
+		right: 1rem;
+		bottom: 1rem;
+		z-index: 40;
+		max-width: 46rem;
+		max-height: 45vh;
+		display: flex;
+		flex-direction: column;
+		border: 1px solid #5a2a2f;
+		border-radius: .6rem;
+		background: #2a1417f2;
+		color: #ffd6d6;
+		box-shadow: 0 6px 24px #0008;
+		overflow: hidden;
+	}
+	#log-box[hidden] { display: none; }
+	#log-head {
+		display: flex;
+		align-items: center;
+		gap: .4rem;
+		padding: .4rem .55rem;
+		border-bottom: 1px solid #5a2a2f;
+		font: 600 12px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
+	}
+	#log-head span {
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	#log-head button {
+		font: inherit;
+		padding: .2rem .55rem;
+		border-radius: .35rem;
+		border: 1px solid #7a3a40;
+		background: #3a1c22;
+		color: inherit;
+		cursor: pointer;
+	}
+	#log-head button:hover { background: #4a2429; }
+	#log {
+		margin: 0;
+		padding: .5rem .7rem;
+		min-height: 3rem;
+		overflow: auto;
+		white-space: pre-wrap;
+		word-break: break-word;
+		font: 400 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
 	#restart { margin-top: 1rem; }
 
 	/* Worlds and games. */
@@ -298,6 +352,18 @@
 </head>
 <body>
 	<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+
+	<!-- What the engine, and the page itself, report as wrong. launcher.js
+	     fills it in and opens it; the buttons are the only way to copy it
+	     or put it away without the browser's developer tools. -->
+	<div id="log-box" hidden>
+		<div id="log-head">
+			<span id="log-title">Erreur</span>
+			<button id="log-copy" type="button">Copier</button>
+			<button id="log-close" type="button">Masquer</button>
+		</div>
+		<pre id="log"></pre>
+	</div>
 
 	<div id="launcher">
 		<div id="panel">
