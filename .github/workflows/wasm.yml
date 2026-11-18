@@ -179,8 +179,8 @@ jobs:
           # <binary dir>/src/CMakeFiles/luanti.dir/link.txt and its object paths
           # are relative to src/, not to the binary dir.  Both are tried, since
           # only the build itself knows which one the link expects.
-          srcdir=$(cd "$(dirname "$link")/.." && pwd)
-          topdir=$(cd "$srcdir/../.." && pwd)
+          srcdir=$(cd "$(dirname "$link")/../.." && pwd)
+          topdir=$(cd "$srcdir/.." && pwd)
           echo "::warning::relink: link=$link srcdir=$srcdir topdir=$topdir"
           for d in "$srcdir" "$topdir"; do
             if ( cd "$d" && eval "$(cat "$link") --emit-symbol-map" ) \
