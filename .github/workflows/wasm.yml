@@ -171,16 +171,18 @@ jobs:
           # annotation, because the job log needs a token to read.
           root=$PWD
           link=$(find "$root/build" -name link.txt -path '*luanti.dir*' -print -quit 2>/dev/null)
-          base=$(dirname "$(find "$root/build" -name CMakeCache.txt -print -quit 2>/dev/null)")
-          echo "::warning::relink: link=$link base=$base"
-          if [ -z "$link" ] || [ -z "$base" ] || [ ! -d "$base" ]; then
-            echo "::error::relink: no link.txt or no CMake binary dir"
+          if [ -z "$link" ]; then
+            echo "::error::relink: no link.txt under $root/build"
             exit 1
           fi
+          # The target sits in src/, so the link file is
+          # <cmake binary dir>/src/CMakeFiles/luanti.dir/link.txt and its paths
+          # are relative to that binary dir, not to src/.
+          base=$(cd "$(dirname "$link")/../../.." && pwd)
+          echo "::warning::relink: link=$link base=$base"
           if ( cd "$base" && eval "$(cat "$link") --emit-symbol-map" ) \
                  > /tmp/relink.log 2>&1; then
-            echo "::warning::relink: ok"
-            ls -l "$base/bin" || true
+            echo "::warning::relink: ok $(ls -l "$base/bin/luanti.js.symbols" 2>/dev/null || echo 'no symbol file')"
           else
             echo "::warning::relink failed: $(tail -n 6 /tmp/relink.log | tr '\n' ' ')"
             exit 1
