@@ -103,6 +103,15 @@ jobs:
           # Emscripten only exports the heap views when they are asked for.
           sed -i 's/EXPORTED_RUNTIME_METHODS=ccall,cwrap/EXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32/' build_luanti.sh
           sed -i 's/-DENABLE_UPDATE_CHECKER=0/-DENABLE_UPDATE_CHECKER=0 -DENABLE_CURL=FALSE -DBUILD_UNITTESTS=FALSE/' build_luanti.sh
+          # TEMPORARY, with the worker-side stack below: keep the wasm function
+          # names, so a stack reads as a C++ function and not as an index.
+          sed -i 's/^export LDFLAGS="/export LDFLAGS="--profiling-funcs /' build_luanti.sh
+          if ! grep -q '^export LDFLAGS="--profiling-funcs ' build_luanti.sh; then
+            echo "::warning::--profiling-funcs was not added to LDFLAGS: the stack will name function indices"
+          fi
+          if ! grep -q 'DIAG main thread heartbeat' sources/luanti/src/server.cpp; then
+            echo "::warning::the heartbeat is not in server.cpp"
+          fi
           sed -i 's/-DCMAKE_INSTALL_PREFIX/-DZSTD_BUILD_SHARED=OFF -DCMAKE_INSTALL_PREFIX/' build_zstd.sh
           sed -i 's/-DCMAKE_INSTALL_PREFIX/-DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX/' build_libzip.sh
           grep -n 'ENABLE_CURL\|EXPORTED_RUNTIME_METHODS\|^export LDFLAGS=' build_luanti.sh
@@ -153,6 +162,36 @@ jobs:
             | while IFS= read -r line; do echo "::error::$line"; done
           tail -n 40 build.log
           exit 1
+
+      - name: Keep the stack of a worker's error, for the crash no log explains
+        working-directory: port
+        run: |
+          set -euo pipefail
+          # TEMPORARY. A worker's uncaught error reaches the page as a message
+          # with no stack at all ("null function"), which names nothing.  This
+          # keeps the worker's own stack in a file the page can read.
+          cat >> build/luanti/bin/luanti.js <<'EOF'
+          (function () {
+            if (typeof addEventListener !== "function") return;
+            addEventListener("error", function (ev) {
+              var text = "[diag] " + new Date().toISOString() + " " +
+                (ev && ev.message ? ev.message : "error") + "\n" +
+                ((ev && ev.error && ev.error.stack) || "no stack") + "\n";
+              try { console.error(text); } catch (e) {}
+              try {
+                navigator.storage.getDirectory().then(function (root) {
+                  return root.getDirectoryHandle("luanti", { create: true });
+                }).then(function (dir) {
+                  return dir.getFileHandle("diag.txt", { create: true });
+                }).then(function (file) {
+                  return file.createWritable();
+                }).then(function (w) {
+                  return w.write(text).then(function () { return w.close(); });
+                });
+              } catch (e) {}
+            });
+          })();
+          EOF
 
       - name: Stage the zips the play page loads
         run: |

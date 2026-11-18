@@ -21,6 +21,7 @@
 #include "mapblock.h"
 #include "nodedef.h"
 #include "particles.h"
+#include "porting.h"
 #include "profiler.h"
 #include "remoteplayer.h"
 #include "server/ban.h"
@@ -655,6 +656,19 @@ void Server::stop()
 
 void Server::step()
 {
+#ifdef __EMSCRIPTEN__
+	// DIAGNOSTIC (temporary): the web port loses a thread to a bare
+	// "null function" and the log stops with it.  One line every two seconds
+	// from this thread says whether the page's loop is still running, which is
+	// what tells a helper thread's death apart from the engine's own.
+	static u64 diag_last_beat = 0;
+	u64 diag_now = porting::getTimeMs();
+	if (diag_now - diag_last_beat >= 2000) {
+		diag_last_beat = diag_now;
+		verbosestream << "DIAG main thread heartbeat " << diag_now << std::endl;
+	}
+#endif
+
 	// Throw if fatal error occurred in thread
 	std::string async_err = m_async_fatal_error.get();
 	if (!async_err.empty()) {
