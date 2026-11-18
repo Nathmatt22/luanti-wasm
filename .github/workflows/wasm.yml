@@ -103,16 +103,9 @@ jobs:
           # Emscripten only exports the heap views when they are asked for.
           sed -i 's/EXPORTED_RUNTIME_METHODS=ccall,cwrap/EXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32/' build_luanti.sh
           sed -i 's/-DENABLE_UPDATE_CHECKER=0/-DENABLE_UPDATE_CHECKER=0 -DENABLE_CURL=FALSE -DBUILD_UNITTESTS=FALSE/' build_luanti.sh
-          # TEMPORARY: keep the wasm name section, so the stack the page saves
-          # names a C++ function instead of wasm-function[N].  -g2 and not a
-          # setting or a --flag: CMake's compile checks run with LDFLAGS, and
-          # anything the checks do not know makes them fail (that once read as
-          # "SDL2 is too old").  The objects are built without -g, so this adds
-          # names and no debug information.
-          sed -i 's/-sWASMFS=1/-sWASMFS=1 -g2/' build_luanti.sh
-          if ! grep -q '\-sWASMFS=1 -g2' build_luanti.sh; then
-            echo "::warning::-g2 was not added: stacks will name function indices"
-          fi
+          # No flag is added to LDFLAGS: CMake's compile checks link with it,
+          # and anything they do not know fails them (which reads as "SDL2 is
+          # too old").  The symbol map is made by re-linking further down.
           if ! grep -q 'DIAG main thread heartbeat' sources/luanti/src/server.cpp; then
             echo "::warning::the heartbeat is not in server.cpp"
           fi
@@ -166,6 +159,22 @@ jobs:
             | while IFS= read -r line; do echo "::error::$line"; done
           tail -n 40 build.log
           exit 1
+
+      - name: Re-link the same objects for a symbol map
+        working-directory: port/build/luanti
+        run: |
+          set -euo pipefail
+          # TEMPORARY. The stack the page saves says wasm-function[4844], and
+          # the release binary has no names to look it up in.  Running the very
+          # link CMake made, with --emit-symbol-map and nothing else, writes
+          # bin/luanti.js.symbols beside it.
+          cmd="$(cat CMakeFiles/luanti.dir/link.txt) --emit-symbol-map"
+          if ! eval "$cmd" > relink.log 2>&1; then
+            tail -n 20 relink.log
+            echo "::error::the relink for the symbol map failed"
+            exit 1
+          fi
+          ls -l bin/
 
       - name: Keep the stack of a worker's error, for the crash no log explains
         working-directory: port
@@ -228,6 +237,10 @@ jobs:
           mv "$stage/games.zip" "out/minetest-game-$g.zip"
           rm -rf "$stage"
           cp port/build/luanti/bin/luanti.js port/build/luanti/bin/luanti.wasm out/
+          # TEMPORARY, with the relink above: the map from wasm function index
+          # to name, so a saved stack can be read.
+          cp port/build/luanti/bin/luanti.js.symbols out/ \
+            || echo "::warning::there is no symbol map"
           # The page, and the manifest that names the zips by the hash of
           # their contents so that a visit only unpacks what changed.
           cp luanti/wasmgame/web/index.html luanti/wasmgame/web/launcher.js \
