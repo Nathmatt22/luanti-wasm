@@ -104,13 +104,14 @@ jobs:
           sed -i 's/EXPORTED_RUNTIME_METHODS=ccall,cwrap/EXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPU32/' build_luanti.sh
           sed -i 's/-DENABLE_UPDATE_CHECKER=0/-DENABLE_UPDATE_CHECKER=0 -DENABLE_CURL=FALSE -DBUILD_UNITTESTS=FALSE/' build_luanti.sh
           # TEMPORARY: keep the wasm name section, so the stack the page saves
-          # names a C++ function instead of wasm-function[N].  A -s setting,
-          # not a --flag: CMake's compile checks run with LDFLAGS and reject the
-          # flags that only make sense at link time (it once read as "SDL2 is
-          # too old").
-          sed -i 's/-sWASMFS=1/-sWASMFS=1 -sEMIT_NAME_SECTION=1/' build_luanti.sh
-          if ! grep -q 'EMIT_NAME_SECTION' build_luanti.sh; then
-            echo "::warning::the name section was not asked for: stacks will name function indices"
+          # names a C++ function instead of wasm-function[N].  -g2 and not a
+          # setting or a --flag: CMake's compile checks run with LDFLAGS, and
+          # anything the checks do not know makes them fail (that once read as
+          # "SDL2 is too old").  The objects are built without -g, so this adds
+          # names and no debug information.
+          sed -i 's/-sWASMFS=1/-sWASMFS=1 -g2/' build_luanti.sh
+          if ! grep -q '\-sWASMFS=1 -g2' build_luanti.sh; then
+            echo "::warning::-g2 was not added: stacks will name function indices"
           fi
           if ! grep -q 'DIAG main thread heartbeat' sources/luanti/src/server.cpp; then
             echo "::warning::the heartbeat is not in server.cpp"
