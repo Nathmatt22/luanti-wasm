@@ -459,7 +459,9 @@ jobs:
             echo "::error::tailscale up failed: $(tail -3 /tmp/up.log | tr '\n' ' ')"
             exit 1
           fi
-          tailscale status | head -3
+          # head closes the pipe and tailscale then dies of SIGPIPE, which
+          # pipefail turns into a failed step even though the join worked.
+          tailscale status | head -3 || true
 
       - name: Publish
         env:
