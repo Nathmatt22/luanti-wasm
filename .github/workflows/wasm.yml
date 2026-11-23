@@ -334,12 +334,26 @@ jobs:
   # a push: a pull request must not publish anything.
   deploy:
     needs: build
-    if: ${{ github.event_name == 'push' && vars.DEPLOY_HOST != '' }}
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-24.04
     concurrency:
       group: deploy
       cancel-in-progress: false
     steps:
+      # A skipped job says nothing about why, so the missing setting is
+      # reported here instead: a variable created under an environment is
+      # only visible to a job that declares that environment.
+      - name: Check the box is configured
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOST}" ]; then
+            echo "::error::DEPLOY_HOST is empty for this job. Add it under Settings > Secrets and variables > Actions > Variables (repository variables); a variable created under Settings > Environments belongs to that environment and is visible only to a job that declares it."
+            exit 1
+          fi
+          echo "publishing to ${HOST}"
+
       - name: Fetch the build
         uses: actions/download-artifact@v4
         with:
