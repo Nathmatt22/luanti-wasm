@@ -395,12 +395,39 @@ jobs:
           done
           ls -l out
 
-      - name: Tailscale
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: ${{ vars.TS_TAG || 'tag:ci' }}
+      # The action this replaces reported only "sudo failed with exit code 1",
+      # so the reason is fetched here and annotated instead: an annotation is
+      # readable without the job log. The key that is minted stays on the
+      # runner: it is masked, and used once to join.
+      - name: Join the tailnet
+        env:
+          TS_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_CLIENT_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TAG: ${{ vars.TS_TAG || 'tag:ci' }}
+        run: |
+          set -uo pipefail
+          reply=$(curl -sS -u "${TS_CLIENT_ID}:${TS_CLIENT_SECRET}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"capabilities\":{\"devices\":{\"create\":{\"reusable\":false,\"ephemeral\":true,\"preauthorized\":true,\"tags\":[\"${TAG}\"]}}}}" \
+            -w '\n%{http_code}' \
+            https://api.tailscale.com/api/v2/tailnet/-/keys)
+          code=${reply##*$'\n'}
+          body=${reply%$'\n'*}
+          if [ "${code}" != "200" ]; then
+            echo "::error::Tailscale refused a key for ${TAG}: HTTP ${code} ${body}"
+            exit 1
+          fi
+          key=$(printf '%s' "${body}" | jq -r .key)
+          echo "::add-mask::${key}"
+          if ! curl -fsSL https://tailscale.com/install.sh | sh > /tmp/install.log 2>&1; then
+            echo "::error::installing tailscale failed: $(tail -2 /tmp/install.log | tr '\n' ' ')"
+            exit 1
+          fi
+          if ! sudo tailscale up --authkey "${key}" --hostname "ci-${GITHUB_RUN_ID}" > /tmp/up.log 2>&1; then
+            echo "::error::tailscale up failed: $(tail -3 /tmp/up.log | tr '\n' ' ')"
+            exit 1
+          fi
+          tailscale status | head -3
 
       - name: Publish
         env:
@@ -411,7 +438,7 @@ jobs:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
@@ -423,7 +450,12 @@ jobs:
           else
             ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
           fi
-          rsync -av --chmod=D755,F644 \
-            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=yes" \
-            out/ "$DEPLOY_USER@$HOST:$TARGET/"
+          if ! rsync -av --chmod=D755,F644 \
+            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
+            out/ "$DEPLOY_USER@$HOST:$TARGET/" > /tmp/rsync.log 2>&1; then
+            echo "::error::rsync failed: $(tail -5 /tmp/rsync.log | tr '\n' ' ')"
+            echo "::warning::tailscale sees: $(tailscale status 2>&1 | head -3 | tr '\n' ' ')"
+            exit 1
+          fi
+          tail -3 /tmp/rsync.log
           echo "published to $HOST:$TARGET"
