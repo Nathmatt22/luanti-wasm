@@ -406,11 +406,26 @@ jobs:
           TAG: ${{ vars.TS_TAG || 'tag:ci' }}
         run: |
           set -uo pipefail
-          reply=$(curl -sS -u "${TS_CLIENT_ID}:${TS_CLIENT_SECRET}" \
+          # A client id and secret are not credentials for the API itself:
+          # they buy an access token first, and that token asks for the key.
+          token=$(curl -sS -X POST https://api.tailscale.com/api/v2/oauth/token \
+            -d "client_id=${TS_CLIENT_ID}" \
+            -d "client_secret=${TS_CLIENT_SECRET}" \
+            -d 'grant_type=client_credentials' \
+            -w '\n%{http_code}')
+          tcode=${token##*$'\n'}
+          tbody=${token%$'\n'*}
+          if [ "${tcode}" != "200" ]; then
+            echo "::error::Tailscale refused the OAuth client: HTTP ${tcode} ${tbody}"
+            exit 1
+          fi
+          access=$(printf '%s' "${tbody}" | jq -r .access_token)
+          echo "::add-mask::${access}"
+          reply=$(curl -sS -X POST https://api.tailscale.com/api/v2/tailnet/-/keys \
+            -H "Authorization: Bearer ${access}" \
             -H 'Content-Type: application/json' \
             -d "{\"capabilities\":{\"devices\":{\"create\":{\"reusable\":false,\"ephemeral\":true,\"preauthorized\":true,\"tags\":[\"${TAG}\"]}}}}" \
-            -w '\n%{http_code}' \
-            https://api.tailscale.com/api/v2/tailnet/-/keys)
+            -w '\n%{http_code}')
           code=${reply##*$'\n'}
           body=${reply%$'\n'*}
           if [ "${code}" != "200" ]; then
