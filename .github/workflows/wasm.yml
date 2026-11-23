@@ -145,9 +145,14 @@ jobs:
         working-directory: port
         run: |
           set -o pipefail
-          # A clean configure every time: the flags the step above changes are
-          # only read when cmake runs, and a cached tree would link with the
-          # old ones.
+          # Its own build tree, from nothing: CMake keeps what it was told the
+          # first time (the linker flags a run with LDFLAGS in the environment
+          # had, for one), and the tree the cache hands back is then configured
+          # against flags this run does not have. What the cmake checks in irr/
+          # answer depends on that, and a stale answer reads as "SDL2 is too
+          # old". Only Luanti's tree goes: the dependencies below build/ are
+          # the ones the cache restored.
+          rm -rf build/luanti
           if ./build_luanti.sh > build.log 2>&1; then
             tail -n 15 build.log
             exit 0
@@ -157,6 +162,10 @@ jobs:
           grep -n -i -E 'CMake Error|error:|fatal error|undefined reference|No such file' build.log \
             | head -n 8 \
             | while IFS= read -r line; do echo "::error::$line"; done
+          # What CMake was in the middle of when it stopped, which the lines
+          # above do not say.
+          tail -n 12 build.log \
+            | while IFS= read -r line; do echo "::error::… $line"; done
           tail -n 40 build.log
           exit 1
 
