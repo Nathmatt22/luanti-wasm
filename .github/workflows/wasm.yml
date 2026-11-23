@@ -421,15 +421,32 @@ jobs:
           fi
           access=$(printf '%s' "${tbody}" | jq -r .access_token)
           echo "::add-mask::${access}"
-          reply=$(curl -sS -X POST https://api.tailscale.com/api/v2/tailnet/-/keys \
-            -H "Authorization: Bearer ${access}" \
-            -H 'Content-Type: application/json' \
-            -d "{\"capabilities\":{\"devices\":{\"create\":{\"reusable\":false,\"ephemeral\":true,\"preauthorized\":true,\"tags\":[\"${TAG}\"]}}}}" \
-            -w '\n%{http_code}')
+          # The tags the client may hand out come with its token, so a tag the
+          # client does not permit can be replaced with one it does.
+          client_tags=$(printf '%s' "${tbody}" \
+            | jq -r '.tags // empty | if type == "array" then join(" ") else . end' \
+            | tr ',' ' ')
+          mint() {
+            curl -sS -X POST https://api.tailscale.com/api/v2/tailnet/-/keys \
+              -H "Authorization: Bearer ${access}" \
+              -H 'Content-Type: application/json' \
+              -d "{\"capabilities\":{\"devices\":{\"create\":{\"reusable\":false,\"ephemeral\":true,\"preauthorized\":true,\"tags\":[\"$1\"]}}}}" \
+              -w '\n%{http_code}'
+          }
+          reply=$(mint "${TAG}")
           code=${reply##*$'\n'}
           body=${reply%$'\n'*}
+          for t in ${client_tags}; do
+            [ "${code}" = "200" ] && break
+            [ "${t}" = "${TAG}" ] && continue
+            echo "::warning::${TAG} is not permitted for this OAuth client, trying ${t} instead"
+            reply=$(mint "${t}")
+            code=${reply##*$'\n'}
+            body=${reply%$'\n'*}
+            if [ "${code}" = "200" ]; then TAG="${t}"; fi
+          done
           if [ "${code}" != "200" ]; then
-            echo "::error::Tailscale refused a key for ${TAG}: HTTP ${code} ${body}"
+            echo "::error::Tailscale refused a key for ${TAG}: HTTP ${code} ${body}. Declare the tag in the ACL's tagOwners ({\"tag:ci\": [\"autogroup:admin\"]}), give the same tag to the OAuth client, or set TS_TAG to a tag both allow."
             exit 1
           fi
           key=$(printf '%s' "${body}" | jq -r .key)
