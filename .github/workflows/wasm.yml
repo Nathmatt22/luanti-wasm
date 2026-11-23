@@ -322,3 +322,71 @@ jobs:
           name: luanti-wasm
           path: out/
           if-no-files-found: error
+
+  # Publishing, for the site that is behind a tailnet: the runner joins the
+  # tailnet, so the box needs no port open to the internet, and rsync copies
+  # the page and the engine over ssh. Nothing is deleted there, so whatever
+  # this workflow does not know about (a hand-made file, a world saved by the
+  # server) stays where it is.
+  #
+  # It only runs once the repository has the values it needs (repository
+  # variables DEPLOY_HOST/… and secrets TS_OAUTH_*/DEPLOY_SSH_KEY), and only on
+  # a push: a pull request must not publish anything.
+  deploy:
+    needs: build
+    if: ${{ github.event_name == 'push' && vars.DEPLOY_HOST != '' }}
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    steps:
+      - name: Fetch the build
+        uses: actions/download-artifact@v4
+        with:
+          name: luanti-wasm
+          path: out
+
+      - name: Check what is going to be published
+        run: |
+          set -euo pipefail
+          for f in index.html launcher.js menu.js mod-handoff.js \
+                   luanti.js luanti.wasm packs.json; do
+            if [ ! -s "out/$f" ]; then
+              echo "::error::out/$f is missing from the artifact"
+              exit 1
+            fi
+          done
+          ls -l out
+
+      - name: Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAG || 'tag:ci' }}
+
+      - name: Publish
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          TARGET: ${{ vars.DEPLOY_PATH }}
+          PORT: ${{ vars.DEPLOY_PORT || '22' }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # Without the box's host key in DEPLOY_KNOWN_HOSTS, trust on first
+          # use: the runner is a fresh machine every time, but on a tailnet
+          # only the tailnet can answer for that name.
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          fi
+          rsync -av --chmod=D755,F644 \
+            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=yes" \
+            out/ "$DEPLOY_USER@$HOST:$TARGET/"
+          echo "published to $HOST:$TARGET"
