@@ -336,6 +336,9 @@ jobs:
     needs: build
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-24.04
+    # The box's settings are variables and secrets of this environment, and a
+    # job only sees them once it declares the environment it belongs to.
+    environment: truc
     concurrency:
       group: deploy
       cancel-in-progress: false
@@ -369,7 +372,7 @@ jobs:
             echo "::warning::secrets this job cannot see:${absent}"
           fi
           if [ -n "${missing}" ]; then
-            echo "::error::missing settings:${missing}. Add them under Settings > Secrets and variables > Actions > Variables (repository variables, or as repository secrets); a variable created under Settings > Environments belongs to that environment and is visible only to a job that declares it."
+            echo "::error::missing settings:${missing}. This job reads the environment 'truc', so add them under Settings > Environments > truc, or as repository variables or secrets."
             exit 1
           fi
           echo "publishing to ${HOST}"
