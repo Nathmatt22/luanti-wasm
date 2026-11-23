@@ -488,9 +488,11 @@ jobs:
             fi
           fi
           if ! rsync -av --chmod=D755,F644 \
-            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15" \
+            -e "ssh -v -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15" \
             out/ "$DEPLOY_USER@$HOST:$TARGET/" > /tmp/rsync.log 2>&1; then
             echo "::error::rsync failed: $(tail -5 /tmp/rsync.log | tr '\n' ' ')"
+            echo "::warning::the key this job offered: $(ssh-keygen -lf ~/.ssh/id_deploy 2>/dev/null | cut -d' ' -f2) as ${DEPLOY_USER}@${HOST} port ${PORT}"
+            echo "::warning::ssh said: $(grep -E 'Offering public key|Authentications that can continue|Permission denied|no mutual signature|Load key' /tmp/rsync.log | tail -4 | tr '\n' ' ')"
             echo "::warning::tailscale sees: $(tailscale status 2>&1 | head -3 | tr '\n' ' ')"
             exit 1
           fi
