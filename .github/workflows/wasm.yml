@@ -345,10 +345,13 @@ jobs:
       # only visible to a job that declares that environment.
       - name: Check the box is configured
         env:
-          HOST: ${{ vars.DEPLOY_HOST }}
+          HOST: ${{ vars.DEPLOY_HOST || secrets.DEPLOY_HOST }}
+          VARS_JSON: ${{ toJSON(vars) }}
         run: |
           set -euo pipefail
           if [ -z "${HOST}" ]; then
+            names=$(printf '%s' "${VARS_JSON}" | jq -r 'keys | join(", ")' 2>/dev/null || true)
+            echo "::warning::configuration variables this job can see: ${names:-none}"
             echo "::error::DEPLOY_HOST is empty for this job. Add it under Settings > Secrets and variables > Actions > Variables (repository variables); a variable created under Settings > Environments belongs to that environment and is visible only to a job that declares it."
             exit 1
           fi
@@ -381,7 +384,7 @@ jobs:
 
       - name: Publish
         env:
-          HOST: ${{ vars.DEPLOY_HOST }}
+          HOST: ${{ vars.DEPLOY_HOST || secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           TARGET: ${{ vars.DEPLOY_PATH }}
           PORT: ${{ vars.DEPLOY_PORT || '22' }}
