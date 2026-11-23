@@ -21,6 +21,10 @@ env:
   # for both, so it is replaced with the revision the gateways answer.
   WEBSHIMS_PIN: 70653a91c974aa2b20df09a39f858d92e663c1a7
   WEBSHIMS_REV: 91c3fe85d2cb7f85cc8e19d3f53dc8f252a69ff7
+  # Bumped when what the cache restores turns out to be unfit: a cache is saved
+  # once and never updated, so a sysroot first archived without the SDL2 port
+  # stays without it. 2: the SDL2 port was missing from the sysroot.
+  DEPS_CACHE: 2
 
 jobs:
   build:
@@ -61,7 +65,7 @@ jobs:
             port/build
             port/sources
             port/.deps-ok
-          key: wasm-deps-${{ env.WEBPORT_REV }}
+          key: wasm-deps-${{ env.WEBPORT_REV }}-${{ env.DEPS_CACHE }}
 
       - name: Fetch its sources
         # Installs and patches emsdk 6.0.8 through common.sh, and fetches zstd,
@@ -141,6 +145,32 @@ jobs:
           fi
           ./build_webshims.sh
 
+      - name: Install the emscripten SDL2 port
+        # -sUSE_SDL=2 means "the port", and a port is unpacked into the sysroot
+        # the first time a build asks for it. That unpacking is not part of the
+        # cache if the cache was first saved before any build got this far, and
+        # irr/'s version check then compiles #include <SDL_version.h> against a
+        # sysroot that has no such header: the configure stops with "SDL2 is too
+        # old, required is at least 2.0.10!", which names neither the port nor
+        # the missing file. Asking for it here says which it was.
+        working-directory: port
+        run: |
+          set +e
+          source emsdk/emsdk_env.sh >/dev/null 2>&1
+          hdr=emsdk/upstream/emscripten/cache/sysroot/include/SDL2/SDL_version.h
+          if [ -f "$hdr" ]; then
+            echo "the SDL2 headers are in the sysroot"
+            exit 0
+          fi
+          echo "::warning::the SDL2 port is not in the sysroot; installing it"
+          embuilder build sdl2 2>&1 | tail -n 10
+          if [ -f "$hdr" ]; then
+            echo "the SDL2 port is installed"
+            exit 0
+          fi
+          echo "::error::embuilder could not install the SDL2 port"
+          exit 1
+
       - name: Build Luanti
         working-directory: port
         run: |
@@ -166,6 +196,13 @@ jobs:
           # above do not say.
           tail -n 12 build.log \
             | while IFS= read -r line; do echo "::error::… $line"; done
+          # A check that fails says only that it failed; what the compiler said
+          # about it is in CMakeError.log, and nowhere the checks page shows.
+          errlog=$(find build -name CMakeError.log -print -quit)
+          if [ -n "$errlog" ]; then
+            echo "::error::$(grep -i -A6 -E 'SDL_version|SDL2' "$errlog" \
+              | tr '\n' '|' | head -c 1200)"
+          fi
           tail -n 40 build.log
           exit 1
 
