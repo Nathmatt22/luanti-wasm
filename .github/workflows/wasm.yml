@@ -481,9 +481,12 @@ jobs:
             printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           else
             ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+            if [ ! -s ~/.ssh/known_hosts ]; then
+              echo "::warning::ssh-keyscan found no host key for ${HOST}, so it is trusted on first use: the tailnet authenticates the node, the key only pins it."
+            fi
           fi
           if ! rsync -av --chmod=D755,F644 \
-            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
+            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15" \
             out/ "$DEPLOY_USER@$HOST:$TARGET/" > /tmp/rsync.log 2>&1; then
             echo "::error::rsync failed: $(tail -5 /tmp/rsync.log | tr '\n' ' ')"
             echo "::warning::tailscale sees: $(tailscale status 2>&1 | head -3 | tr '\n' ' ')"
