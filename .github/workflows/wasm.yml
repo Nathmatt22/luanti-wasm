@@ -371,6 +371,16 @@ jobs:
           if [ -n "${absent}" ]; then
             echo "::warning::secrets this job cannot see:${absent}"
           fi
+          if [ -n "${SSH_KEY}" ]; then
+            printf '%s\n' "${SSH_KEY}" > /tmp/id_check
+            chmod 600 /tmp/id_check
+            if ! why=$(timeout 10 ssh-keygen -y -f /tmp/id_check </dev/null 2>&1); then
+              echo "::error::DEPLOY_SSH_KEY does not hold a usable private key: ${why}"
+              exit 1
+            fi
+            echo "::warning::deploy key offered by this job: $(ssh-keygen -lf /tmp/id_check </dev/null | cut -d' ' -f2)"
+            rm -f /tmp/id_check
+          fi
           if [ -n "${missing}" ]; then
             echo "::error::missing settings:${missing}. This job reads the environment 'truc', so add them under Settings > Environments > truc, or as repository variables or secrets."
             exit 1
@@ -491,7 +501,7 @@ jobs:
             -e "ssh -v -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15" \
             out/ "$DEPLOY_USER@$HOST:$TARGET/" > /tmp/rsync.log 2>&1; then
             echo "::error::rsync failed: $(tail -5 /tmp/rsync.log | tr '\n' ' ')"
-            echo "::warning::the key this job offered: $(ssh-keygen -lf ~/.ssh/id_deploy 2>/dev/null | cut -d' ' -f2) as ${DEPLOY_USER}@${HOST} port ${PORT}"
+            echo "::warning::the key this job offered: $(ssh-keygen -lf ~/.ssh/id_deploy </dev/null 2>&1 | head -1) as ${DEPLOY_USER}@${HOST} port ${PORT}"
             echo "::warning::ssh said: $(grep -E 'Offering public key|Authentications that can continue|Permission denied|no mutual signature|Load key' /tmp/rsync.log | tail -4 | tr '\n' ' ')"
             echo "::warning::tailscale sees: $(tailscale status 2>&1 | head -3 | tr '\n' ' ')"
             exit 1
