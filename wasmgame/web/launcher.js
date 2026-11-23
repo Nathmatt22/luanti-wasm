@@ -90,6 +90,10 @@
 
 	function fail(what) {
 		console.error("[launcher]", what);
+		// A page that is waiting to hand a mod over should not wait for ever: it
+		// gets its turn, and the calls it makes then are the ones that fail.
+		if (readyResolve)
+			readyResolve();
 		note("Launcher : " + (what && what.message ? what.message : String(what)), true);
 		stop();
 		bootPanel.hidden = false;
@@ -262,6 +266,12 @@
 	// without a launcher leaves them empty.
 	var hooks = {};
 
+	// Resolved once the engine's files and a game are in place, which is what
+	// anything that works on the storage has to wait for. mod-handoff.js waits
+	// on it before it installs anything a page sends.
+	var readyResolve = null;
+	var readyPromise = new Promise(function (resolve) { readyResolve = resolve; });
+
 	var Luanti = window.Luanti = {
 		// Whether what the engine writes outlives the tab.
 		persistent: false,
@@ -269,9 +279,16 @@
 		dead: false,
 		// The zips this page ships, as packs.json names them.
 		packs: DEFAULT_PACKS,
+		// Resolves when the launcher has finished installing, so that a page
+		// cannot hand a mod over before there is anywhere to put it.
+		ready: readyPromise,
 		on: hooks,
 		play: play,
 		installGameZip: installGameZip,
+		installModZip: installModZip,
+		removeMod: removeMod,
+		setWorldMod: setWorldMod,
+		ensureWorld: ensureWorld,
 		removeGame: removeGame,
 		deleteWorld: deleteWorld,
 		saveWorld: saveWorld,
@@ -306,10 +323,20 @@
 		start().then(function () {
 			bootPanel.hidden = true;
 			menuPanel.hidden = false;
-			if (window.luantiMenu && typeof window.luantiMenu.show === "function")
-				window.luantiMenu.show();
-			else
+			if (window.luantiMenu && typeof window.luantiMenu.show === "function") {
+				// Whoever waits on `ready` waits for the launcher to have read
+				// the storage as well: the page must not be reading it while
+				// the game is writing, and a mod handed over by another page
+				// goes in right after this.
+				var shown = window.luantiMenu.show();
+				if (shown && typeof shown.then === "function")
+					shown.then(readyResolve, readyResolve);
+				else
+					readyResolve();
+			} else {
 				say("Prêt.");
+				readyResolve();
+			}
 		}).catch(fail);
 	}
 
@@ -337,6 +364,25 @@
 			hooks.install(kind, name, phase, fraction);
 		else if (kind === "game")
 			progress(fraction);
+	}
+
+	// A mod the engine has put in /luanti/mods. `name` is what the mod calls
+	// itself, which is what a world enables; empty when the archive was not a
+	// mod after all.
+	function emloop_mod_installed(dir, name, ok) {
+		answer("mod:" + dir, ok ? name : null);
+	}
+
+	function emloop_mod_removed(dir, ok) {
+		answer("mod-removed:" + dir, !!ok);
+	}
+
+	function emloop_world_ready(name, ok) {
+		answer("world-ready:" + name, !!ok);
+	}
+
+	function emloop_world_mod_set(world, mod, ok) {
+		answer("world-mod:" + world + ":" + mod, !!ok);
 	}
 
 	function emloop_exited(code) {
@@ -427,6 +473,10 @@
 		emloop_pack_remove_progress: emloop_pack_remove_progress,
 		emloop_zip_installed: emloop_zip_installed,
 		emloop_zip_install_progress: emloop_zip_install_progress,
+		emloop_mod_installed: emloop_mod_installed,
+		emloop_mod_removed: emloop_mod_removed,
+		emloop_world_ready: emloop_world_ready,
+		emloop_world_mod_set: emloop_world_mod_set,
 		emloop_zip_progress: emloop_zip_progress,
 		emloop_world_zipped: emloop_world_zipped,
 		emloop_world_deleted: emloop_world_deleted,
@@ -695,6 +745,56 @@
 						+ "à sa racine ou dans son seul dossier.");
 			return true;
 		});
+	}
+
+	// Install a mod the player picked, or a page handed over. The name says
+	// where it lands; what the mod calls itself is what comes back, which is
+	// what a world has to enable and is not always the folder's name.
+	function installModZip(dir, bytes) {
+		if (Luanti.dead)
+			return Promise.reject(new Error("Le jeu est fermé : rechargez la page."));
+		var waiting = wait("mod:" + dir, "Installation du mod « " + dir + " »");
+		try {
+			call("emloop_install_mod_zip", ["string", "number", "number"],
+					[dir, handOver(bytes), bytes.length]);
+		} catch (err) {
+			return Promise.reject(err);
+		}
+		return waiting.then(function (name) {
+			if (!name)
+				throw new Error("L'archive n'est pas un mod : il manque un mod.conf "
+						+ "ou un init.lua à sa racine, ou dans son seul dossier.");
+			return name;
+		});
+	}
+
+	// Delete an installed mod. The worlds that loaded it keep the key that
+	// enables it, which Luanti reports as a missing mod rather than a broken
+	// world.
+	function removeMod(dir) {
+		var waiting = wait("mod-removed:" + dir, "Suppression de « " + dir + " »");
+		call("emloop_remove_mod", ["string"], [dir]);
+		return waiting;
+	}
+
+	// Turn a mod on or off in a saved world, the way the game's own "Select
+	// mods" dialog does. It applies to the next start of that world: the
+	// server reads this file as it starts.
+	function setWorldMod(world, mod, enabled) {
+		var waiting = wait("world-mod:" + world + ":" + mod,
+				"Réglage des mods de « " + world + " »");
+		call("emloop_set_world_mod", ["string", "string", "number"],
+				[world, mod, enabled ? 1 : 0]);
+		return waiting;
+	}
+
+	// Make sure worlds/<name> exists, with `game` as its game; a world that is
+	// already there is left as it is. This is what lets a page start a game with
+	// a mod in one step, there being nowhere else to put the mod.
+	function ensureWorld(name, game) {
+		var waiting = wait("world-ready:" + name, "Création du monde « " + name + " »");
+		call("emloop_ensure_world", ["string", "string"], [name, game]);
+		return waiting;
 	}
 
 	// Delete a game and the files it installed. Its worlds stay.

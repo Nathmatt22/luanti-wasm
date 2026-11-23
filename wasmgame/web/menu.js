@@ -51,6 +51,9 @@
 		noWorlds: document.getElementById("no-worlds"),
 		games: document.getElementById("games"),
 		noGames: document.getElementById("no-games"),
+		mods: document.getElementById("mods"),
+		noMods: document.getElementById("no-mods"),
+		importMod: document.getElementById("import-mod"),
 		joinAddress: document.getElementById("join-address"),
 		joinPort: document.getElementById("join-port"),
 		joinName: document.getElementById("join-name"),
@@ -69,6 +72,7 @@
 	var state = {
 		games: [],
 		worlds: [],
+		mods: [],
 		servers: [],
 		selected: null,
 		busy: false
@@ -139,11 +143,30 @@
 
 	// What a directory name can hold, in the same terms as validPackName() in
 	// src/mainloop.cpp: 1 to 64 of [A-Za-z0-9_.-], not starting with . or -.
-	function packName(fileName) {
+	function packName(fileName, fallback) {
 		var base = String(fileName || "").replace(/\.zip$/i, "");
 		base = base.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^[.-]+/, "");
 		base = base.slice(0, 64).replace(/[.-]+$/, "");
-		return base || "imported-game";
+		return base || fallback || "imported-game";
+	}
+
+	// `load_mod_<name> = true` in a world.mt, with the mod's own spelling: a mod
+	// name is case-sensitive, and parseConf() lowercases every key. A value that
+	// is not false or nil is on, the way src/content/mod_configuration.cpp reads
+	// it: a mod the game itself ships is recorded by its path rather than by
+	// `true`.
+	function parseLoadMods(text) {
+		var names = [];
+		String(text || "").split(/\r?\n/).forEach(function (line) {
+			var match = /^\s*load_mod_([^\s=]+)\s*=\s*(.*)$/.exec(line);
+			if (!match)
+				return;
+			var value = match[2].trim();
+			if (value === "false" || value === "nil" || value === "")
+				return;
+			names.push(match[1]);
+		});
+		return names;
 	}
 
 	// "title = Minetest Game" and friends, as game.conf and world.mt write them.
@@ -326,6 +349,9 @@
 						worlds.push({
 							name: name,
 							game: meta.gameid || "",
+							// The mods this world turns on, which is what
+							// the Mods section offers to change.
+							mods: mt ? parseLoadMods(mt) : [],
 							bytes: size.bytes,
 							at: size.latest
 						});
@@ -339,6 +365,54 @@
 					return (b.at || 0) - (a.at || 0) || a.name.localeCompare(b.name, "fr");
 				});
 				return worlds;
+			});
+		});
+	}
+
+	// Every mod the player has installed, from its own folder in mods/ rather
+	// than from a list kept on the side: a mod dropped in by any other route is
+	// in the launcher too, the way a world made in the game is.
+	function readMods(dir) {
+		return childDir(dir, "mods").then(function (modsDir) {
+			if (!modsDir)
+				return [];
+			var mods = [];
+			var pending = [];
+			return iterate(modsDir, function (handle, name) {
+				if (handle.kind !== "directory")
+					return null;
+				pending.push(readText(handle, "mod.conf").then(function (conf) {
+					var meta = conf ? parseConf(conf) : {};
+					mods.push({
+						dir: name,
+						// The name a world has to enable. It is
+						// the folder's unless mod.conf says otherwise.
+						name: meta.name || name,
+						title: meta.title || meta.name || name,
+						description: meta.description || "",
+						enabled: []
+					});
+				}));
+				return null;
+			}).then(function () {
+				return Promise.all(pending);
+			}).then(function () {
+				mods.sort(function (a, b) {
+					return a.title.localeCompare(b.title, "fr");
+				});
+				return mods;
+			});
+		});
+	}
+
+	// Which worlds load which mod, filled in from the worlds themselves: the
+	// same list the game's own "Select mods" dialog reads.
+	function markLoadedMods() {
+		state.mods.forEach(function (mod) {
+			mod.enabled = [];
+			state.worlds.forEach(function (world) {
+				if (world.mods.indexOf(mod.name) !== -1)
+					mod.enabled.push(world.name);
 			});
 		});
 	}
@@ -374,6 +448,7 @@
 	function render() {
 		renderGames();
 		renderWorlds();
+		renderMods();
 		updateStorage();
 	}
 
@@ -447,6 +522,46 @@
 		});
 	}
 
+	// A mod is one folder in mods/, and it is on in a world when that world's
+	// world.mt says so. The two are shown together, because a mod that is
+	// installed and on nowhere does nothing.
+	function renderMods() {
+		els.mods.textContent = "";
+		els.noMods.hidden = state.mods.length > 0;
+		state.mods.forEach(function (mod) {
+			var card = el("article", "card");
+			card.appendChild(el("span", "card-title", mod.title));
+			var meta = ["mods/" + mod.dir];
+			if (mod.description)
+				meta.push(mod.description);
+			card.appendChild(el("span", "card-meta", meta.join(" · ")));
+
+			var actions = el("div", "card-actions");
+						if (!state.worlds.length) {
+				actions.appendChild(el("span", "card-meta",
+						"Aucun monde : « Nouvelle partie » en crée un, où ce mod "
+						+ "pourra être activé."));
+			} else {
+				actions.appendChild(el("span", "card-meta", "Activer dans :"));
+				state.worlds.forEach(function (world) {
+					var on = mod.enabled.indexOf(world.name) !== -1;
+					actions.appendChild(button(world.name + (on ? " ✓" : ""),
+							"small " + (on ? "primary" : "plain"), function () {
+							toggleMod(mod, world, !on, card);
+						}));
+				});
+			}
+			card.appendChild(actions);
+
+			var remove = el("div", "card-actions");
+			remove.appendChild(button("Supprimer", "danger small", function () {
+				askRemoveMod(mod, card);
+			}));
+			card.appendChild(remove);
+			els.mods.appendChild(card);
+		});
+	}
+
 	function select(id) {
 		state.selected = id;
 		try {
@@ -479,10 +594,12 @@
 
 	function refresh() {
 		return luantiDir().then(function (dir) {
-			return Promise.all([readGames(dir), readWorlds(dir)]);
+			return Promise.all([readGames(dir), readWorlds(dir), readMods(dir)]);
 		}).then(function (lists) {
 			state.games = lists[0];
 			state.worlds = lists[1];
+			state.mods = lists[2];
+			markLoadedMods();
 			pickDefaultGame();
 			render();
 		});
@@ -585,7 +702,9 @@
 	// Importing a game
 	/////////////////////////////////////////////////////////////////////////
 
-	function importGame(file) {
+	// `bytes` is the archive when the caller has already read it, as a dropped
+	// file has to be read to find out whether it is a game or a mod.
+	function importGame(file, bytes) {
 		if (state.busy)
 			return;
 		var name = packName(file.name);
@@ -597,11 +716,11 @@
 		els.newGame.disabled = true;
 		els.importButton.disabled = true;
 		message("Lecture de « " + file.name + " »…");
-		new Promise(function (resolve) {
-			resolve(file.arrayBuffer());
-		}).then(function (buffer) {
+		var reading = bytes ? Promise.resolve(bytes)
+				: file.arrayBuffer().then(function (buffer) { return new Uint8Array(buffer); });
+		reading.then(function (data) {
 			message("Installation de « " + name + " »…");
-			return global.Luanti.installGameZip(name, new Uint8Array(buffer));
+			return global.Luanti.installGameZip(name, data);
 		}).then(function () {
 			return refresh();
 		}).then(function () {
@@ -614,6 +733,127 @@
 			els.newGame.disabled = false;
 			els.importButton.disabled = false;
 		});
+	}
+
+	/////////////////////////////////////////////////////////////////////////
+	// Importing a mod, turning one on, taking one away
+	/////////////////////////////////////////////////////////////////////////
+
+	function importMod(file, bytes) {
+		if (state.busy)
+			return;
+		if (!/\.zip$/i.test(file.name)) {
+			message("« " + file.name + " » n'est pas une archive .zip.", true);
+			return;
+		}
+		var dir = packName(file.name, "imported-mod");
+		state.busy = true;
+		els.importMod.disabled = true;
+		els.importButton.disabled = true;
+		message("Lecture de « " + file.name + " »…");
+		var reading = bytes ? Promise.resolve(bytes)
+				: file.arrayBuffer().then(function (buffer) { return new Uint8Array(buffer); });
+		reading.then(function (data) {
+			message("Installation de « " + dir + " »…");
+			return global.Luanti.installModZip(dir, data);
+		}).then(function (name) {
+			return refresh().then(function () {
+				message("« " + name + " » est installé dans mods/. Activez-le dans un "
+						+ "monde ci-dessus : il s'appliquera au prochain lancement de "
+						+ "ce monde.");
+			});
+		}, function (err) {
+			message("« " + dir + " » n'a pas pu être installé : " + (err && err.message), true);
+		}).then(function () {
+			state.busy = false;
+			els.importMod.disabled = false;
+			els.importButton.disabled = false;
+		});
+	}
+
+	function pickModFile() {
+		var input = document.createElement("input");
+		input.type = "file";
+		input.accept = ".zip,application/zip,application/x-zip-compressed";
+		input.style.display = "none";
+		input.addEventListener("change", function () {
+			var file = input.files && input.files[0];
+			if (input.parentNode)
+				input.parentNode.removeChild(input);
+			if (file)
+				importMod(file);
+		});
+		document.body.appendChild(input);
+		input.click();
+	}
+
+	function toggleMod(mod, world, enabled, card) {
+		if (state.busy)
+			return;
+		state.busy = true;
+		card.classList.add("busy");
+		message((enabled ? "Activation de « " : "Désactivation de « ") + mod.title
+				+ " » dans « " + world.name + " »…");
+		global.Luanti.setWorldMod(world.name, mod.name, enabled).then(function (ok) {
+			state.busy = false;
+			card.classList.remove("busy");
+			if (!ok) {
+				message("« " + world.name + " » n'a pas pu être modifié.", true);
+				return;
+			}
+			message("« " + mod.title + " » " + (enabled ? "est activé" : "est désactivé")
+					+ " dans « " + world.name + " » : cela s'applique au prochain "
+					+ "lancement de ce monde.");
+			return refresh();
+		}, function (err) {
+			state.busy = false;
+			card.classList.remove("busy");
+			message(err.message, true);
+		});
+	}
+
+	function askRemoveMod(mod, card) {
+		if (state.busy)
+			return;
+		if (!confirm("Supprimer le mod « " + mod.title + " » ? Les mondes qui "
+				+ "l'activent ne pourront plus le charger."))
+			return;
+		state.busy = true;
+		card.classList.add("busy");
+		message("Suppression de « " + mod.title + " »…");
+		global.Luanti.removeMod(mod.dir).then(function (ok) {
+			state.busy = false;
+			card.classList.remove("busy");
+			if (!ok) {
+				message("« " + mod.title + " » n'a pas pu être entièrement supprimé.", true);
+				return;
+			}
+			message("« " + mod.title + " » est supprimé.");
+			return refresh();
+		}, function (err) {
+			state.busy = false;
+			card.classList.remove("busy");
+			message(err.message, true);
+		});
+	}
+
+	// What a dropped archive holds. A zip keeps its file names uncompressed, in
+	// the directory at its end, so finding a marker in the last few kilobytes is
+	// enough to tell the two apart. A game's archive holds mods of its own, each
+	// with a mod.conf, so game.conf is looked for first.
+	function archiveKind(bytes) {
+		var tail = bytes.subarray(Math.max(0, bytes.length - 256 * 1024));
+		var text;
+		try {
+			text = new TextDecoder("latin1").decode(tail);
+		} catch (err) {
+			return "game";
+		}
+		if (text.indexOf("game.conf") !== -1)
+			return "game";
+		if (text.indexOf("mod.conf") !== -1 || text.indexOf("init.lua") !== -1)
+			return "mod";
+		return "game";
 	}
 
 	function pickFile() {
@@ -677,7 +917,22 @@
 				return;
 			if (files.length > 1)
 				message("Une archive à la fois : « " + files[0].name + " » est installé.");
-			importGame(files[0]);
+			var file = files[0];
+			if (typeof file.arrayBuffer !== "function") {
+				importGame(file);
+				return;
+			}
+			// Read once, so that whether it is a game or a mod is decided
+			// before anything is unpacked anywhere.
+			file.arrayBuffer().then(function (buffer) {
+				var bytes = new Uint8Array(buffer);
+				if (archiveKind(bytes) === "mod")
+					importMod(file, bytes);
+				else
+					importGame(file, bytes);
+			}, function () {
+				importGame(file);
+			});
 		});
 	}
 
@@ -849,7 +1104,7 @@
 		if (!hooks)
 			return;
 		hooks.install = function (kind, name, phase, fraction) {
-			if (kind !== "game")
+			if (kind !== "game" && kind !== "mod")
 				return;
 			message((phase === "delete" ? "Remplacement de « " : "Installation de « ")
 					+ name + " » : " + percent(fraction) + " %");
@@ -953,6 +1208,8 @@
 		setupJoin();
 		els.newGame.addEventListener("click", newGame);
 		els.importButton.addEventListener("click", pickFile);
+		if (els.importMod)
+			els.importMod.addEventListener("click", pickModFile);
 		if (els.confSave) {
 			els.confSave.addEventListener("click", saveConf);
 			els.confReload.addEventListener("click", loadConf);
@@ -962,7 +1219,10 @@
 		message("");
 		if (global.Luanti && global.Luanti.persistent)
 			els.storage.textContent = "Lecture du stockage…";
-		refresh().then(function () {
+		// What is returned tells the caller when the storage has been read: the
+		// mod hand-over in mod-handoff.js waits on it, so that it never uses the
+		// file system while the launcher is listing it.
+		return refresh().then(function () {
 			els.menu.hidden = false;
 		}, function (err) {
 			// A launcher that cannot list anything is still a launcher: the

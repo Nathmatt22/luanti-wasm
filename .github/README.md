@@ -32,7 +32,8 @@ What a visit shows first is `menu.js`, once `launcher.js` has put the engine's f
 * **Vos mondes** — every world in persistent storage, with the game it uses, its size and when it was last played. *Jouer* starts the engine on that world (`luanti --world /luanti/worlds/<name> --go`); *Enregistrer* asks the engine to pack it into a zip and hands it to the browser's downloads; *Supprimer* deletes it through the engine, so that what the mount sees and what the storage holds stay the same.
 * **Jeux** — the installed games, by the `title` in their `game.conf`, with the one this page ships (Minetest Game) marked as such and the ones imported marked as yours. The selected game is the one *Nouvelle partie* proposes: that opens the game's own menu with `menu_last_game` set to it, which is the setting the new-world dialog reads, so the world is created and named there rather than here.
 * **Multijoueur** — the address, port, player name and password to join a server with, the gateway to reach it through (see below), and the public server list. *Rejoindre* starts the engine straight into the server; the last address and name are remembered.
-* **Importer un jeu (.zip)** — a file picker, and a drop target over the whole page, both going through `emloop_install_game_zip()`. Progress and the outcome are shown where the button is.
+* **Importer un jeu (.zip)** — a file picker, and a drop target over the whole page, both going through `emloop_install_game_zip()`. Progress and the outcome are shown where the button is. A dropped archive is looked at first, and installed as a mod instead when its zip directory holds `mod.conf` or `init.lua` rather than a `game.conf`.
+* **Mods** — every folder in `/luanti/mods`, with the same import button, a *Supprimer* that deletes it again, and one button per world that turns the mod on or off in that world (see *Mods* below).
 * **Réglages du jeu** — the contents of `/luanti/minetest.conf` in a text box. Both directions go through the engine (`emloop_read_conf()`, `emloop_write_conf()`), not through the browser's storage from the page: the file the box shows is then exactly the one the engine will open, and there is a single writer. The engine reads that file at startup, so *Enregistrer* applies to the next launch and never to a game already running; it is only offered while the launcher is on screen, before the engine holds the mount, and only once the file has been read, so an empty box can never replace it.
 
 The engine is started with `--logfile ''`, so it writes no `debug.txt`: a page's log is its browser console, which is where everything it prints already goes, and opening a file at the top of a freshly mounted storage was the one thing that failed (`Failed to open "/luanti/bin/./debug.txt": Permission denied`, which Luanti treats as fatal and aborts on). A browser console is not always at hand, though — a phone has none — so `launcher.js` keeps the engine's stderr and the page's own errors (a script error, an uncaught rejection, a refused promise) in a panel over the canvas (`#log-box`) and opens it as soon as a line is about a problem; `Copier` puts the whole log on the clipboard. `launcher.js` also creates `bin/` and an empty `minetest.conf` through OPFS before starting, so that the paths the engine builds from `path_user` resolve, and so that it rewrites a settings file that already exists rather than creating one.
@@ -60,6 +61,51 @@ The module installs a game from a zip itself. `emloop_install_game_zip(name, dat
 [`wasmgame/web/import-game.js`](../wasmgame/web/import-game.js) is the page side: load it after `luanti.js` and call `luantiImportGame.attach()` for a floating *Importer un jeu* button plus drag and drop anywhere on the page, or call `luantiImportGame.install(file)` from a control of your own. Zipping the game's folder and zipping from inside it both work. A page that already defines `emloop_zip_install_progress` and `emloop_zip_installed` keeps its own; one that does not gets a message at the bottom of the page instead.
 
 The Local tab takes the list of games again each time it is shown, so an imported game appears without reloading.
+
+## Mods
+
+Luanti loads a mod from a folder below `/luanti/mods`, and a saved world turns one on by naming it in its own `world.mt` — `load_mod_<name> = true`, the key the game's own *Select mods* dialog writes and the server reads as it starts. Those two are the whole of it, so the module offers four calls and the launcher a section that uses them:
+
+* `emloop_install_mod_zip(dir, data, size)` installs a mod from a zip into `/luanti/mods/<dir>`, taking ownership of `data` (from `emloop_alloc()`). It works out where the mod starts inside the archive the way `emloop_install_game_zip()` does for a game — a folder of its own holding the marker, or the files at the top — and answers with `emloop_mod_installed(dir, name, ok)`. `name` is what the mod calls itself: `name = …` in its `mod.conf`, or the folder's name for a mod written before that file existed. It is not always the folder's, and it is the name a world has to enable.
+* `emloop_remove_mod(dir)` deletes the folder and everything in it, answering with `emloop_mod_removed(dir, ok)`. Worlds that had it on keep the key.
+* `emloop_ensure_world(name, game)` makes `worlds/<name>` with a `world.mt` for `game` if there is none, and leaves an existing world exactly as it is, its game included. Answers with `emloop_world_ready(name, ok)`. It writes the same keys the game's own *New world* dialog writes (`loadGameConfAndInitWorld()` in `src/content/subgames.cpp`) but not `map_meta.txt`, which the server makes from its settings the first time it saves the world.
+* `emloop_set_world_mod(world, mod, enabled)` sets `load_mod_<mod>` in that world's `world.mt` and nothing else — not the game, not the other mods — and answers with `emloop_world_mod_set(world, mod, ok)`. It is read when the world starts, so it applies to the next launch of that world and never to one already running.
+
+A mod is not recorded in the pack database: like a world it is found by looking where it lives, so a mod the player copied into `/luanti/mods` themselves is in the launcher too. A zip that is neither a mod nor a game is refused for want of its marker rather than guessed at, and what was written is taken back, as a half-installed pack is worse than none.
+
+## Starting the game with a mod somebody made
+
+[mtc-creator](https://mtc-creator.vercel.app/) builds a Luanti mod in a browser — blocks, items, tools, recipes, formspecs, textures — and exports it as `mymod.zip` holding `mod.conf`, `init.lua` and `textures/`. Its *Lancer le jeu* button should end with the player in the game, with that mod on, and nothing uploaded anywhere: the bytes go from one page to the other. [`wasmgame/web/mod-handoff.js`](../wasmgame/web/mod-handoff.js) is the receiving end, loaded after `launcher.js`; `?mod=` on the address is the fallback for a zip that is already hosted.
+
+From a page that holds the zip, put this page in a frame and post the archive in:
+
+```js
+var frame = document.querySelector("iframe#game").contentWindow;
+frame.postMessage({
+	type: "luanti:mod", version: 1,
+	mods: [{ name: "mymod", zip: blob }],  // Blob, ArrayBuffer or Uint8Array
+	game: "mtc_gameme",                    // optional; the world's game
+	world: "mymod",                        // optional; defaults to the mod's name
+	player: "invité",                      // optional; --name
+	play: true                             // optional; false installs only
+}, "*");
+```
+
+The page answers to `event.source` as it goes — `{type: "luanti:status", version: 1, phase: "installing", mod: "mymod"}`, then `"preparing"`, `"installed"` (with `mods` and `world`), `"playing"`, or `"error"` with a `message` — and sends `{type: "luanti:ready", version: 1, url: …}` to its parent and to `window.opener` as soon as it can take one. A request that arrives before the launcher is ready is not lost: it waits on `Luanti.ready`, which resolves once the engine's files and a game are in place.
+
+The mod is installed under `/luanti/mods/<name>`, a world called `world` (or the mod's own name) is made for `game` if it is not there yet — so pressing the button again returns to the same world, with the player's changes in it — the mod is turned on in that world, and the engine is started on it with `--go`, which skips the game's menu.
+
+A frame rather than a popup, because this page is served with `Cross-Origin-Opener-Policy: same-origin`: a popup opened from another origin loses `window.opener`, while a frame can always reach its parent and the parent can always reach the frame. Nothing needs an extension or a server: the archive is structured-cloned between the two windows, so a mod made and exported in one browser tab is playable in another without ever being uploaded.
+
+A mod is Lua with the game's privileges on this origin, and it is kept in the player's own storage, so a page that can post to this one can put one there. `ORIGINS` at the top of `mod-handoff.js` restricts who may; empty accepts any page, which is what makes a button on somebody else's site work without this page knowing about it.
+
+Where the zip is already on a server, the same thing works as a link, with no script on the sending side:
+
+```
+https://…/luanti/?mod=https://exemple.fr/mymod.zip&as=mymod&game=mtc_gameme&world=mymod
+```
+
+`mods=` takes a comma-separated list instead, and `play=0` installs without starting anything. The zip has to be served with CORS (`Access-Control-Allow-Origin`), since it is this page that fetches it. The address is remembered for the tab, so that reloading the page after the game is closed comes back to the launcher with the mod in place rather than starting it over.
 
 ## Hosting it
 

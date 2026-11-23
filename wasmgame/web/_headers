@@ -26,3 +26,5 @@
 	Cache-Control: no-cache
 /menu.js
 	Cache-Control: no-cache
+/mod-handoff.js
+	Cache-Control: no-cache

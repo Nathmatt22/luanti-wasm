@@ -437,6 +437,22 @@
 				</p>
 				<p class="hint">Le jeu sélectionné est celui que « Nouvelle partie » propose.</p>
 
+				<h2>Mods</h2>
+				<div class="actionbar">
+					<button id="import-mod" class="button plain" type="button">Importer un mod (.zip)</button>
+				</div>
+				<div id="mods" class="grid"></div>
+				<p id="no-mods" class="hint" hidden>
+					Aucun mod installé. Une archive de mod contient un <code>mod.conf</code>
+					(ou un <code>init.lua</code>) et ses textures.
+				</p>
+				<p class="hint">
+					Un mod installé ici est dans <code>/luanti/mods</code>. Le bouton d'un
+					monde l'active ou le désactive pour ce monde, et le moteur le charge au
+					prochain lancement de celui-ci : c'est le même réglage que celui du
+					dialogue « Sélectionner les mods » du jeu.
+				</p>
+
 				<h2>Réglages du jeu</h2>
 				<div class="card settings">
 					<textarea id="conf-text" spellcheck="false" wrap="off" rows="14"
@@ -460,9 +476,10 @@
 
 	<button id="fullscreen" type="button">Plein écran</button>
 
-	<div id="drop" hidden>Déposez une archive .zip pour installer un jeu</div>
+	<div id="drop" hidden>Déposez une archive .zip pour installer un jeu ou un mod</div>
 
 	<script src="menu.js"></script>
 	<script src="launcher.js"></script>
+	<script src="mod-handoff.js"></script>
 </body>
 </html>

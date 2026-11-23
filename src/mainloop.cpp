@@ -65,6 +65,12 @@
 // unpacks into here, and so does a game installed from a dropped zip.
 #define GAMES_DIR LUANTI_ROOT "/games"
 
+// Where Luanti looks for mods of its own. RUN_IN_PLACE makes LUANTI_ROOT
+// path_user, and getModsPaths() lists the "mods" folder below it; the player's
+// mods live there, apart from the ones a game ships inside its own folder. A
+// mod installed from a zip lands here too.
+#define MODS_DIR LUANTI_ROOT "/mods"
+
 extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void emloop_set_pointerlock(int want);
@@ -140,6 +146,39 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void emloop_install_game_zip(const char *name, const char *version,
                                  void *data, size_t size);
+
+    // Install a mod from a zip into /luanti/mods/<dir>. Where the mod starts
+    // inside the archive is worked out here, the way it is for a game: a folder
+    // of its own holding mod.conf (or init.lua, for a mod written before that
+    // file existed), or those files at the top. Whatever is already installed
+    // under that name is replaced.
+    //
+    // Takes ownership of `data`, which must come from emloop_alloc(). Answers
+    // asynchronously with emloop_mod_installed(dir, name, ok), where `name` is
+    // what the mod calls itself, which is the name a world has to enable and is
+    // not always the folder's.
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_install_mod_zip(const char *dir, void *data, size_t size);
+
+    // Delete an installed mod and everything in it. The worlds that loaded it
+    // are left as they are. Answers asynchronously with emloop_mod_removed().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_remove_mod(const char *dir);
+
+    // Make sure a saved world called `name` exists, with `game` as its game: an
+    // existing world is left exactly as it is, its game included. A page that
+    // has to start a game with a mod in one step needs a world to put the mod
+    // in, and that world may be one the player already has.
+    // Answers asynchronously with emloop_world_ready(name, ok).
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_ensure_world(const char *name, const char *game);
+
+    // Turn a mod on or off in a saved world, by setting `load_mod_<mod>` in its
+    // world.mt, which is the key the game's own "Select mods" dialog writes and
+    // the server reads. Nothing else in the file is touched.
+    // Answers asynchronously with emloop_world_mod_set(world, mod, ok).
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_set_world_mod(const char *world, const char *mod, int enabled);
 
     EMSCRIPTEN_KEEPALIVE
     void emloop_invoke_main(int argc, char* argv[]);
@@ -1275,14 +1314,31 @@ static void notifyZipInstalled(const std::string &kind, const std::string &name,
 static std::string installRoot(const std::string &kind, const std::string &name) {
     if (kind == "world")
         return worldPath(name);
+    if (kind == "mod")
+        return std::string(MODS_DIR "/") + name;
     return std::string(GAMES_DIR "/") + name;
 }
 
 // The file that says the installed directory is what it claims to be. Luanti
-// only lists a world with a world.mt or a game with a game.conf, so an archive
-// that leaves neither behind has not installed anything.
-static std::string installMarker(const std::string &kind) {
-    return (kind == "world") ? "world.mt" : "game.conf";
+// only lists a world with a world.mt, a game with a game.conf and a mod with a
+// mod.conf, so an archive that leaves none of them behind has not installed
+// anything.
+static const char *installMarker(const std::string &kind) {
+    if (kind == "world")
+        return "world.mt";
+    if (kind == "mod")
+        return "mod.conf";
+    return "game.conf";
+}
+
+// Whether what `kind` installed in `dest` is what it says it is. A mod written
+// before mod.conf existed is still a mod, and its init.lua is what Luanti
+// reads: mods/ has had such ones for as long as it has had mods.
+static bool installComplete(const std::string &kind, const std::string &dest) {
+    struct stat st;
+    if (stat((dest + "/" + installMarker(kind)).c_str(), &st) == 0)
+        return true;
+    return kind == "mod" && stat((dest + "/init.lua").c_str(), &st) == 0;
 }
 
 // Delete `root` and everything in it, reporting how far along that is where
@@ -1486,15 +1542,21 @@ static bool unzip(const std::string &kind, const std::string &name,
     return ok;
 }
 
-static void do_install_zip(const std::string &kind, const std::string &name,
+// True if what `kind` was to hold is now in place under `name`. The caller is
+// the one that tells the page: a game answers on emloop_zip_installed() and a
+// mod on emloop_mod_installed(), and only the caller knows which it is
+// installing.
+static bool do_install_zip(const std::string &kind, const std::string &name,
                            const std::string &prefix, size_t count,
-                           const std::string &version, void *data, size_t size) {
+                           const std::string &version, void *data, size_t size)
+{
     const std::string dest = installRoot(kind, name);
     // A game is recorded in the pack database the way a downloaded one is, so
     // that the page lists it, can add up what it takes, and can uninstall it
-    // again. A world is found by looking in worlds/, so there is nothing to
-    // record for one. Without persistent storage there is nothing to record
-    // into either: the install only lasts as long as the page.
+    // again. A world is found by looking in worlds/ and a mod by looking in
+    // mods/, so there is nothing to record for either. Without persistent
+    // storage there is nothing to record into anyway: the install only lasts as
+    // long as the page.
     const bool remember = (kind == "game") && persistent;
     // What the install is recorded as: the version the page knows it by, or
     // "local" for a game the player picked, which no page can upgrade.
@@ -1507,8 +1569,7 @@ static void do_install_zip(const std::string &kind, const std::string &name,
         if (readWholeFile(packMetaPath(name, ".ver"), installed) && installed == version) {
             std::cout << "emloop_install_zip: " << name
                       << " is already installed, skipping" << std::endl;
-            notifyZipInstalled(kind, name, true);
-            return;
+            return true;
         }
     }
 
@@ -1523,8 +1584,7 @@ static void do_install_zip(const std::string &kind, const std::string &name,
     // stay behind and be loaded alongside it.
     if (!wipeTree(kind, name, dest, true)) {
         std::cout << "emloop_install_zip: could not clear " << dest << std::endl;
-        notifyZipInstalled(kind, name, false);
-        return;
+        return false;
     }
     notifyZipInstallProgress(kind, name, "install", 0.0);
 
@@ -1536,8 +1596,7 @@ static void do_install_zip(const std::string &kind, const std::string &name,
     } else {
         ok = unzip(kind, name, prefix, dest, count, data, size, manifest);
     }
-    struct stat st;
-    if (ok && stat((dest + "/" + installMarker(kind)).c_str(), &st) != 0) {
+    if (ok && !installComplete(kind, dest)) {
         std::cout << "emloop_install_zip: " << dest << " has no "
                   << installMarker(kind) << std::endl;
         ok = false;
@@ -1546,8 +1605,7 @@ static void do_install_zip(const std::string &kind, const std::string &name,
         // Half a world is worse than none: Luanti would list it and fail to
         // open it. Take back what was written.
         wipeTree(kind, name, dest, false);
-        notifyZipInstalled(kind, name, false);
-        return;
+        return false;
     }
     if (remember) {
         if (!makeDirs(PACK_DB_DIR) ||
@@ -1559,12 +1617,11 @@ static void do_install_zip(const std::string &kind, const std::string &name,
                       << " as installed" << std::endl;
             wipeTree(kind, name, dest, false);
             unlink(packMetaPath(name, ".files").c_str());
-            notifyZipInstalled(kind, name, false);
-            return;
+            return false;
         }
     }
     std::cout << "emloop_install_zip: installed " << kind << " " << name << std::endl;
-    notifyZipInstalled(kind, name, true);
+    return true;
 }
 
 void emloop_install_zip(const char *kind, const char *name, const char *prefix,
@@ -1583,8 +1640,10 @@ void emloop_install_zip(const char *kind, const char *name, const char *prefix,
         return;
     }
     post([zipKind, zipName, zipPrefix, count, data, size]() {
-        do_install_zip(zipKind, zipName, zipPrefix, count, "", data, size);
+        const bool installed = do_install_zip(zipKind, zipName, zipPrefix,
+                                              count, "", data, size);
         free(data);
+        notifyZipInstalled(zipKind, zipName, installed);
     });
 }
 
@@ -1602,30 +1661,32 @@ void emloop_free(void *ptr) {
 
 // Work out where the game in the zip starts, and how many entries it holds.
 //
-// An archive made by zipping a folder holds the game in a folder of its own
-// (mygame/game.conf, and everything else below mygame), and one made from
-// inside the game's folder holds game.conf at the top. Both are taken to be
-// the game itself. An archive that looks like neither is installed as it is,
-// and the installer refuses it for want of a game.conf at the root: guessing
-// further would install one game's files over another's.
+// An archive made by zipping a folder holds the pack in a folder of its own
+// (mygame/game.conf, mymod/mod.conf, and everything else below it), and one
+// made from inside that folder holds its marker at the top. Both are taken to
+// be the pack itself. An archive that looks like neither is installed as it is,
+// and the installer refuses it for want of the marker at the root: guessing
+// further would install one pack's files over another's.
 //
 // The entry count is what how far along the unpacking is is measured against,
 // so it counts every entry that is a file or a directory, the two the
 // installer writes. Entries the prefix leaves out are counted too, which only
 // makes the progress bar reach its end early.
-static bool scan_game_zip(void *data, size_t size, std::string &prefix, size_t &count)
+static bool scan_pack_zip(const std::string &kind, void *data, size_t size,
+                          std::string &prefix, size_t &count)
 {
+    const std::string what = "emloop_install_" + kind + "_zip";
     struct archive *a = archive_read_new();
     bool ok = false;
     count = 0;
     if (archive_read_support_format_zip(a) != ARCHIVE_OK) {
-        std::cout << "emloop_install_game_zip failed: zip is not supported" << std::endl;
+        std::cout << what << " failed: zip is not supported" << std::endl;
     } else if (archive_read_open_memory(a, data, size) != ARCHIVE_OK) {
-        std::cout << "emloop_install_game_zip failed: invalid archive" << std::endl;
+        std::cout << what << " failed: invalid archive" << std::endl;
     } else {
-        const std::string marker = installMarker("game");
+        const std::string marker = installMarker(kind);
         // The folder every entry sits in, as long as they all sit in the same
-        // one, and the one a game.conf was found directly below.
+        // one, and the one the marker was found directly below.
         std::string folder;
         std::string nested;
         bool at_top = false;
@@ -1638,7 +1699,7 @@ static bool scan_game_zip(void *data, size_t size, std::string &prefix, size_t &
                 break;
             }
             if (r < ARCHIVE_WARN) {
-                std::cout << "emloop_install_game_zip: read next header: "
+                std::cout << what << ": read next header: "
                           << archive_error_string(a) << std::endl;
                 break;
             }
@@ -1652,17 +1713,20 @@ static bool scan_game_zip(void *data, size_t size, std::string &prefix, size_t &
             count++;
             const size_t slash = rel.find('/');
             if (slash == std::string::npos) {
-                if (rel == marker)
+                if (rel == marker || (kind == "mod" && rel == "init.lua"))
                     at_top = true;
                 continue;
             }
             const std::string top = rel.substr(0, slash);
             if (folder.empty())
-                folder = rel.substr(0, rel.find('/'));
+                folder = top;
             else if (top != folder)
                 several_folders = true;
-            if (rel.size() > slash + 1 &&
-                    rel.compare(slash + 1, rel.size() - slash - 1, marker) == 0)
+            // Directly below the folder, not somewhere further down: a mod's
+            // own subfolder may hold anything.
+            const std::string below = rel.substr(slash + 1);
+            if (below.find('/') == std::string::npos &&
+                    (below == marker || (kind == "mod" && below == "init.lua")))
                 nested = top;
         }
         if (ok && !at_top && !nested.empty() && !several_folders)
@@ -1685,7 +1749,7 @@ void emloop_install_game_zip(const char *name, const char *version,
     }
     std::string prefix;
     size_t count = 0;
-    if (!scan_game_zip(data, size, prefix, count)) {
+    if (!scan_pack_zip("game", data, size, prefix, count)) {
         free(data);
         notifyZipInstalled("game", gameName, false);
         return;
@@ -1693,8 +1757,10 @@ void emloop_install_game_zip(const char *name, const char *version,
     std::cout << "emloop_install_game_zip: installing " << gameName << " from "
               << count << " entries under \"" << prefix << "\"" << std::endl;
     post([gameName, gameVersion, prefix, count, data, size]() {
-        do_install_zip("game", gameName, prefix, count, gameVersion, data, size);
+        const bool installed = do_install_zip("game", gameName, prefix, count,
+                                              gameVersion, data, size);
         free(data);
+        notifyZipInstalled("game", gameName, installed);
     });
 }
 
@@ -1925,6 +1991,224 @@ void emloop_write_conf(const char *text) {
         MAIN_THREAD_EM_ASM({
             emloop_conf_written($0);
         }, ok ? 1 : 0);
+    });
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Mods
+/////////////////////////////////////////////////////////////////////////////
+//
+// A mod is a folder below /luanti/mods, and a saved world turns one on by
+// naming it in its own world.mt (`load_mod_<name> = true`), which is what the
+// game's own "Select mods" dialog writes and what the server reads. Between
+// them those two are everything a page needs to start a game with a mod
+// somebody made in a browser: install the folder from a zip, make sure there is
+// a world, and put the key in it.
+//
+// Everything here runs on the worker thread that owns the mount, like the rest
+// of the file: the browser thread has to stay free to relay WasmFS's own work,
+// and a page must not touch the file system while the game runs.
+
+static void notifyModInstalled(const std::string &dir, const std::string &name, bool ok) {
+    MAIN_THREAD_EM_ASM({
+        emloop_mod_installed(UTF8ToString($0), UTF8ToString($1), $2);
+    }, dir.c_str(), name.c_str(), ok ? 1 : 0);
+}
+
+static void notifyModRemoved(const std::string &dir, bool ok) {
+    MAIN_THREAD_EM_ASM({
+        emloop_mod_removed(UTF8ToString($0), $1);
+    }, dir.c_str(), ok ? 1 : 0);
+}
+
+static void notifyWorldReady(const std::string &name, bool ok) {
+    MAIN_THREAD_EM_ASM({
+        emloop_world_ready(UTF8ToString($0), $1);
+    }, name.c_str(), ok ? 1 : 0);
+}
+
+static void notifyWorldModSet(const std::string &world, const std::string &mod, bool ok) {
+    MAIN_THREAD_EM_ASM({
+        emloop_world_mod_set(UTF8ToString($0), UTF8ToString($1), $2);
+    }, world.c_str(), mod.c_str(), ok ? 1 : 0);
+}
+
+// What a mod calls itself: `name = ...` in its mod.conf, or, for a mod written
+// before that file existed, the folder it was installed in. It matters because
+// a world enables a mod by its own name (`load_mod_<name>`) and not by the name
+// of the folder, which are not always the same.
+static std::string installedModName(const std::string &dir) {
+    std::string conf;
+    if (!readWholeFile(std::string(MODS_DIR "/") + dir + "/mod.conf", conf))
+        return dir;
+    std::istringstream is(conf);
+    std::string line;
+    while (std::getline(is, line)) {
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+        if (trim(line.substr(0, eq)) != "name")
+            continue;
+        std::string name = trim(line.substr(eq + 1));
+        if (name.size() > 1 && name[0] == '"' && name.back() == '"')
+            name = trim(name.substr(1, name.size() - 2));
+        // It ends up after `load_mod_` in world.mt, so it has to be a name a
+        // setting can hold. A mod that calls itself something else keeps the
+        // folder's name, which is what Luanti falls back to as well.
+        if (validPackName(name))
+            return name;
+        break;
+    }
+    return dir;
+}
+
+void emloop_install_mod_zip(const char *dir, void *data, size_t size) {
+    std::string modDir(dir ? dir : "");
+    if (!validPackName(modDir)) {
+        std::cout << "emloop_install_mod_zip: rejecting invalid mod name" << std::endl;
+        free(data);
+        notifyModInstalled(modDir, modDir, false);
+        return;
+    }
+    std::string prefix;
+    size_t count = 0;
+    if (!scan_pack_zip("mod", data, size, prefix, count)) {
+        free(data);
+        notifyModInstalled(modDir, modDir, false);
+        return;
+    }
+    std::cout << "emloop_install_mod_zip: installing " << modDir << " from "
+              << count << " entries under \"" << prefix << "\"" << std::endl;
+    post([modDir, prefix, count, data, size]() {
+        const bool installed = do_install_zip("mod", modDir, prefix, count, "",
+                                              data, size);
+        const std::string name = installed ? installedModName(modDir) : modDir;
+        free(data);
+        notifyModInstalled(modDir, name, installed);
+    });
+}
+
+void emloop_remove_mod(const char *dir) {
+    std::string modDir(dir ? dir : "");
+    if (!validPackName(modDir)) {
+        std::cout << "emloop_remove_mod: rejecting invalid mod name" << std::endl;
+        notifyModRemoved(modDir, false);
+        return;
+    }
+    post([modDir]() {
+        const bool ok = wipeTree("mod", modDir, installRoot("mod", modDir), true);
+        std::cout << "emloop_remove_mod: " << (ok ? "removed " : "could not remove ")
+                  << modDir << std::endl;
+        notifyModRemoved(modDir, ok);
+    });
+}
+
+// The settings file of a saved world, which is where Luanti keeps its game and
+// the mods it loads.
+static std::string worldConf(const std::string &world) {
+    return worldPath(world) + "/world.mt";
+}
+
+// Make sure a world called `name` exists, with `game` as its game. An existing
+// world is left exactly as it is, its game included: this is called before a
+// page starts a world with a mod in it, and that world may be one the player
+// already has.
+//
+// A new one is written the way the game's own "New world" dialog writes it
+// (loadGameConfAndInitWorld() in src/content/subgames.cpp), minus map_meta.txt:
+// that file is made from the settings the engine has when it starts, which is
+// after the page has done its installing, and the server writes it the first
+// time the world is saved.
+static bool do_ensure_world(const std::string &name, const std::string &game) {
+    const std::string path = worldPath(name);
+    if (!makeDirs(path))
+        return false;
+    const std::string conf = worldConf(name);
+    struct stat st;
+    if (stat(conf.c_str(), &st) == 0)
+        return true;
+    std::string text;
+    text += "world_name = " + name + "\n";
+    text += "gameid = " + game + "\n";
+    text += "backend = sqlite3\n";
+    text += "player_backend = sqlite3\n";
+    text += "auth_backend = sqlite3\n";
+    text += "mod_storage_backend = sqlite3\n";
+    // The two settings a world carries of its own. The dialog copies them from
+    // the settings the game was launched with, which is minetest.conf, and so
+    // does this when the file has them: the page's own files are what the
+    // player set, and a world made here should not quietly disagree with them.
+    std::string settings;
+    readWholeFile(LUANTI_ROOT "/minetest.conf", settings);
+    const std::map<std::string, std::string> launched = confEntries(settings);
+    for (const char *key : { "creative_mode", "enable_damage" }) {
+        auto it = launched.find(key);
+        if (it != launched.end())
+            text += std::string(key) + " = " + it->second + "\n";
+    }
+    if (!writeWholeFile(conf, text)) {
+        std::cout << "emloop_ensure_world: could not write " << conf << std::endl;
+        return false;
+    }
+    std::cout << "emloop_ensure_world: made a world for " << game << " at "
+              << path << std::endl;
+    return true;
+}
+
+void emloop_ensure_world(const char *name, const char *game) {
+    std::string worldName(name ? name : "");
+    std::string gameId(game ? game : "");
+    if (!validWorldName(worldName) || !validPackName(gameId)) {
+        std::cout << "emloop_ensure_world: rejecting " << worldName << " / "
+                  << gameId << std::endl;
+        post([worldName]() { notifyWorldReady(worldName, false); });
+        return;
+    }
+    post([worldName, gameId]() {
+        notifyWorldReady(worldName, do_ensure_world(worldName, gameId));
+    });
+}
+
+// Turn a mod on or off in a saved world. `load_mod_<name>` is the only key
+// touched: the game, the other mods and whatever else the file holds stay as
+// they are, which is what makes this safe to call on a world the player has.
+static bool do_set_world_mod(const std::string &world, const std::string &mod,
+                             bool enabled) {
+    const std::string path = worldConf(world);
+    std::string existing;
+    if (!readWholeFile(path, existing))
+        return false;
+    std::map<std::string, std::string> forced;
+    forced["load_mod_" + mod] = enabled ? "true" : "false";
+    std::string out = rewriteConf(existing, forced);
+    if (!out.empty() && out.back() != '\n')
+        out.push_back('\n');
+    // rewriteConf() takes the key out of `forced` when the file already had it;
+    // what is left belongs at the end.
+    for (const auto &entry : forced)
+        out += entry.first + " = " + entry.second + "\n";
+    if (!writeWholeFile(path, out)) {
+        std::cout << "emloop_set_world_mod: could not write " << path << std::endl;
+        return false;
+    }
+    std::cout << "emloop_set_world_mod: " << mod << (enabled ? " on" : " off")
+              << " in " << world << std::endl;
+    return true;
+}
+
+void emloop_set_world_mod(const char *world, const char *mod, int enabled) {
+    std::string worldName(world ? world : "");
+    std::string modName(mod ? mod : "");
+    if (!validWorldName(worldName) || !validPackName(modName)) {
+        std::cout << "emloop_set_world_mod: rejecting " << worldName << " / "
+                  << modName << std::endl;
+        post([worldName, modName]() { notifyWorldModSet(worldName, modName, false); });
+        return;
+    }
+    const bool wantEnabled = (enabled != 0);
+    post([worldName, modName, wantEnabled]() {
+        notifyWorldModSet(worldName, modName,
+                          do_set_world_mod(worldName, modName, wantEnabled));
     });
 }
 
