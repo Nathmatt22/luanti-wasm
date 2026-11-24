@@ -874,6 +874,19 @@
 		}
 	});
 
+	// The engine is built around shared memory, which a browser only gives to a
+	// page it has made cross-origin isolated. Without that, the module's first
+	// postMessage of its memory fails with "The object can not be cloned",
+	// which says nothing about the cause, and the page stays on "Chargement…".
+	// Safari does not implement COEP `credentialless`, so it lands here with the
+	// headers _headers spells out; say what is missing instead.
+	if (!window.crossOriginIsolated) {
+		fail("Cette page n'est pas cross-origin isolated : le serveur doit envoyer "
+				+ "Cross-Origin-Opener-Policy: same-origin et "
+				+ "Cross-Origin-Embedder-Policy: require-corp.");
+		return;
+	}
+
 	var script = document.createElement("script");
 	script.src = "luanti.js" + BUILD;
 	script.async = true;

@@ -23,7 +23,7 @@ It builds zstd, libarchive, paradust7's webshims and libzip, then Luanti, with t
 
 ## Running it
 
-The build uses shared memory, so its page must be cross-origin isolated (COOP `same-origin`, COEP `credentialless`), and it needs a browser with JSPI. The page sets `Module` (`canvas`, `print`, `printErr`, `locateFile`, `onAbort`) and loads `luanti.js`; once `main()` calls `emloop_ready()`, the page writes the engine's files to `/luanti`, the game to `/luanti/games` and the player's files to `/luanti`, calls `emsocket_init()` and then `emloop_invoke_main(argc, argv)`. `irrlicht_resize(w, h)` follows the page's size. `wg_request_files()` answers with `wg_files(ptr, len)` on the page (each file as a u32 path length, the path, a u32 size and the bytes; the page frees `ptr`), or not at all when nothing changed. The page must not use the file system itself while the game runs, as that can wait on the game's threads while they wait on the page, and WasmFS proxies every OPFS operation to a worker while the browser thread has to stay free to relay it, so filesystem work from the page is always posted to the engine's own worker thread (`post()` in `mainloop.cpp`) rather than done in the `emloop_*` call itself. `emloop_read_conf()` and `emloop_write_conf(text)` are that for `minetest.conf`: they answer with `emloop_conf_read(text)` and `emloop_conf_written(ok)`.
+The build uses shared memory, so its page must be cross-origin isolated (COOP `same-origin`, COEP `require-corp`), and it needs a browser with JSPI. The page sets `Module` (`canvas`, `print`, `printErr`, `locateFile`, `onAbort`) and loads `luanti.js`; once `main()` calls `emloop_ready()`, the page writes the engine's files to `/luanti`, the game to `/luanti/games` and the player's files to `/luanti`, calls `emsocket_init()` and then `emloop_invoke_main(argc, argv)`. `irrlicht_resize(w, h)` follows the page's size. `wg_request_files()` answers with `wg_files(ptr, len)` on the page (each file as a u32 path length, the path, a u32 size and the bytes; the page frees `ptr`), or not at all when nothing changed. The page must not use the file system itself while the game runs, as that can wait on the game's threads while they wait on the page, and WasmFS proxies every OPFS operation to a worker while the browser thread has to stay free to relay it, so filesystem work from the page is always posted to the engine's own worker thread (`post()` in `mainloop.cpp`) rather than done in the `emloop_*` call itself. `emloop_read_conf()` and `emloop_write_conf(text)` are that for `minetest.conf`: they answer with `emloop_conf_read(text)` and `emloop_conf_written(ok)`.
 
 ## The launcher
 
@@ -113,8 +113,15 @@ A build is a handful of files side by side: `index.html`, `menu.js`, `launcher.j
 
 ```
 Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: credentialless
+Cross-Origin-Embedder-Policy: require-corp
 ```
+
+`require-corp` rather than `credentialless`: Safari does not implement the
+`credentialless` value, so a page served with it keeps `crossOriginIsolated`
+false there and the module's first `postMessage` of its shared memory fails
+with `DataCloneError: The object can not be cloned` — after which the page
+stays on *Chargement…*. Every file here is same-origin, so `require-corp` costs
+nothing; the public server list is a CORS fetch, which `require-corp` allows.
 
 `wasmgame/web/_headers` is what Cloudflare Pages and Netlify read. For Caddy:
 
@@ -122,7 +129,7 @@ Cross-Origin-Embedder-Policy: credentialless
 :8080 {
 	header {
 		Cross-Origin-Opener-Policy same-origin
-		Cross-Origin-Embedder-Policy credentialless
+		Cross-Origin-Embedder-Policy require-corp
 	}
 	root * /srv/luanti
 	file_server
