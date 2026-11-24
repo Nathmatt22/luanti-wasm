@@ -279,7 +279,9 @@
 				order.push(group);
 			}
 			group.count++;
-			group.bytes += entry.transferSize || 0;
+			// decodedBodySize : la taille du fichier, pas ce qui a traversé le
+			// réseau pour un 304 (transferSize y vaut quelques centaines d'octets).
+			group.bytes += entry.decodedBodySize || entry.transferSize || 0;
 			group.slowest = Math.max(group.slowest, entry.duration || 0);
 		});
 		if (!order.length)
@@ -302,10 +304,10 @@
 			"module      : " + (typeof m.ccall === "function" ? "chargé" : "pas encore")
 				+ (m.HEAPU8 ? ", mémoire " + size(m.HEAPU8.byteLength) : "")
 				+ (m.calledRun ? ", main lancé" : ""),
-			"moteur      : " + (l
+			"moteur      : " + (typeof m.ccall === "function" && l
 				? (l.dead ? "terminé" : "vivant")
 					+ (l.persistent ? ", stockage persistant" : ", stockage en mémoire")
-				: "pas encore de launcher"),
+				: "pas encore démarré"),
 			"machine     : " + (navigator.hardwareConcurrency || "?") + " cœurs"
 				+ (navigator.deviceMemory ? ", " + navigator.deviceMemory + " Go" : "")
 				+ (window.isSecureContext ? ", contexte sûr" : ", PAS de contexte sûr"),
