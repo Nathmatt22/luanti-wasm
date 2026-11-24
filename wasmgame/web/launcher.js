@@ -66,6 +66,22 @@
 	var restartButton = document.getElementById("restart");
 	var fullscreenButton = document.getElementById("fullscreen");
 
+	// Le panneau de diagnostic montre ce que la page fait, dans l'ordre et en
+	// direct ; ces deux-là en sont la mémoire.
+	var T0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0;
+	var debugEvents = [];
+	var lastFraction = -1;
+
+	function now() {
+		return ((typeof performance !== "undefined" && performance.now ? performance.now() : 0) - T0) / 1000;
+	}
+
+	function debugEvent(text) {
+		debugEvents.push({ t: now(), text: String(text == null ? "" : text) });
+		if (debugEvents.length > 200)
+			debugEvents.splice(0, debugEvents.length - 200);
+	}
+
 	/////////////////////////////////////////////////////////////////////////
 	// What the page shows while it works
 	/////////////////////////////////////////////////////////////////////////
@@ -73,9 +89,11 @@
 	function say(text) {
 		statusLine.textContent = text;
 		console.log("[launcher] " + text);
+		debugEvent(text);
 	}
 
 	function progress(fraction) {
+		lastFraction = fraction;
 		bar.style.width = Math.max(0, Math.min(100, fraction * 100)) + "%";
 	}
 
@@ -156,6 +174,7 @@
 		if (!line)
 			return;
 		logLines.push(line);
+		debugEvent(line);
 		if (logLines.length > LOG_MAX)
 			logLines.splice(0, logLines.length - LOG_MAX);
 		if (serious)
@@ -213,6 +232,138 @@
 			logCopyButton.addEventListener("click", copyLog);
 	}
 
+	/////////////////////////////////////////////////////////////////////////
+	// Le diagnostic du chargement
+	/////////////////////////////////////////////////////////////////////////
+
+	// Un panneau qui se rafraîchit tant qu'il est ouvert : ce que la page fait,
+	// ce qu'elle télécharge, où en est le module. C'est la console qu'un
+	// téléphone n'a pas, et le seul endroit où voir un démarrage qui n'aboutit
+	// pas sans ouvrir les outils du navigateur.
+	var debugBox = document.getElementById("debug");
+	var debugOut = document.getElementById("debug-out");
+	var debugToggle = document.getElementById("debug-toggle");
+	var debugTimer = 0;
+
+	function size(count) {
+		if (!count)
+			return "0";
+		if (count >= 1073741824)
+			return (count / 1073741824).toFixed(1) + " Go";
+		if (count >= 1048576)
+			return (count / 1048576).toFixed(1) + " Mo";
+		if (count >= 1024)
+			return (count / 1024).toFixed(0) + " Ko";
+		return count + " o";
+	}
+
+	// Ce que la page a demandé, regroupé par nom : les threads du moteur
+	// demandent tous luanti.js, et c'est le genre de détail qui explique un
+	// démarrage lent.
+	function resourceLines() {
+		var groups = {};
+		var order = [];
+		var entries;
+		try {
+			entries = performance.getEntriesByType("resource");
+		} catch (err) {
+			return ["  (indisponible dans ce navigateur)"];
+		}
+		entries.forEach(function (entry) {
+			var name = String(entry.name || "").split("?")[0].split("/").pop();
+			if (!name)
+				return;
+			var group = groups[name];
+			if (!group) {
+				group = groups[name] = { name: name, count: 0, bytes: 0, slowest: 0 };
+				order.push(group);
+			}
+			group.count++;
+			group.bytes += entry.transferSize || 0;
+			group.slowest = Math.max(group.slowest, entry.duration || 0);
+		});
+		if (!order.length)
+			return ["  rien encore"];
+		return order.map(function (group) {
+			return "  " + group.name + (group.count > 1 ? " ×" + group.count : "")
+					+ " — " + size(group.bytes)
+					+ " — " + (group.slowest / 1000).toFixed(1) + " s";
+		});
+	}
+
+	function debugText() {
+		var m = window.Module || {};
+		var l = window.Luanti;
+		var lines = [
+			"Luanti — " + now().toFixed(1) + " s depuis le début du chargement",
+			"étape       : " + (statusLine ? statusLine.textContent : "?"),
+			"progression : " + (lastFraction >= 0 ? Math.round(lastFraction * 100) + " %" : "—"),
+			"isolé       : " + (window.crossOriginIsolated ? "oui" : "NON — COOP/COEP manquants"),
+			"module      : " + (typeof m.ccall === "function" ? "chargé" : "pas encore")
+				+ (m.HEAPU8 ? ", mémoire " + size(m.HEAPU8.byteLength) : "")
+				+ (m.calledRun ? ", main lancé" : ""),
+			"moteur      : " + (l
+				? (l.dead ? "terminé" : "vivant")
+					+ (l.persistent ? ", stockage persistant" : ", stockage en mémoire")
+				: "pas encore de launcher"),
+			"machine     : " + (navigator.hardwareConcurrency || "?") + " cœurs"
+				+ (navigator.deviceMemory ? ", " + navigator.deviceMemory + " Go" : "")
+				+ (window.isSecureContext ? ", contexte sûr" : ", PAS de contexte sûr"),
+			"",
+			"ressources :"
+		];
+		lines = lines.concat(resourceLines());
+		lines.push("", "journal (" + debugEvents.length + ") :");
+		debugEvents.slice(-40).forEach(function (event) {
+			lines.push("  " + event.t.toFixed(1) + "s  " + event.text);
+		});
+		return lines.join("\n");
+	}
+
+	function paintDebug() {
+		if (debugOut)
+			debugOut.textContent = debugText();
+	}
+
+	function showDebug(show) {
+		if (!debugBox)
+			return;
+		debugBox.hidden = !show;
+		if (debugToggle)
+			debugToggle.setAttribute("aria-expanded", show ? "true" : "false");
+		if (debugTimer) {
+			clearInterval(debugTimer);
+			debugTimer = 0;
+		}
+		if (!show)
+			return;
+		paintDebug();
+		debugTimer = setInterval(paintDebug, 500);
+	}
+
+	if (debugToggle)
+		debugToggle.addEventListener("click", function () {
+			showDebug(debugBox ? debugBox.hidden : false);
+		});
+	var debugClose = document.getElementById("debug-close");
+	if (debugClose)
+		debugClose.addEventListener("click", function () { showDebug(false); });
+	var debugCopy = document.getElementById("debug-copy");
+	if (debugCopy)
+		debugCopy.addEventListener("click", function () {
+			var text = debugText();
+			var done = function () {
+				debugCopy.textContent = "Copié";
+				setTimeout(function () { debugCopy.textContent = "Copier"; }, 1500);
+			};
+			if (navigator.clipboard && navigator.clipboard.writeText)
+				navigator.clipboard.writeText(text).then(done, function () {});
+		});
+
+	// Un appui sur « Debug » pendant le chargement : le panneau s'ouvre et se
+	// met à jour tout seul, sans rien avoir à taper dans une console.
+	debugEvent("page chargée");
+
 	// A script error, or a promise nobody caught: both would otherwise only
 	// ever reach the console.
 	window.addEventListener("error", function (event) {
@@ -220,11 +371,14 @@
 				? " (" + event.filename + ":" + event.lineno + ")"
 				: "";
 		note("Page : " + ((event && event.message) || "erreur inconnue") + where, true);
+		debugEvent("ERREUR " + ((event && event.error && event.error.stack) || (event && event.message) || "?"));
 	});
 	window.addEventListener("unhandledrejection", function (event) {
 		var reason = event && event.reason;
 		var what = reason && reason.message ? reason.message : String(reason);
 		note("Page : promesse rejetée : " + what, true);
+		// La pile dit d'où ça vient, ce que le message seul ne dit jamais.
+		debugEvent("REJET " + (reason && reason.stack ? reason.stack : what));
 	});
 
 	/////////////////////////////////////////////////////////////////////////

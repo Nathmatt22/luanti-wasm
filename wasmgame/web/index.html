@@ -348,6 +348,70 @@
 		pointer-events: none;
 	}
 	#drop[hidden] { display: none; }
+
+	/* Le diagnostic du chargement : un bouton toujours là, un panneau qui se
+	   rafraîchit pendant que la page travaille. Ce qu'il montre est ce que la
+	   page sait (étape, module, ressources, journal) ; rien n'est envoyé. */
+	#debug-toggle {
+		position: fixed;
+		right: max(.6rem, env(safe-area-inset-right));
+		bottom: max(.6rem, env(safe-area-inset-bottom));
+		z-index: 50;
+		padding: .35rem .6rem;
+		border: 1px solid var(--line);
+		border-radius: .45rem;
+		background: #16181dd9;
+		color: var(--dim);
+		font: 500 .75rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+		cursor: pointer;
+	}
+	#debug-toggle:hover { color: var(--text); background: var(--card-hover); }
+	#debug-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+
+	#debug {
+		position: fixed;
+		right: max(.6rem, env(safe-area-inset-right));
+		bottom: calc(max(.6rem, env(safe-area-inset-bottom)) + 2.4rem);
+		z-index: 51;
+		width: min(94vw, 36rem);
+		max-height: 58vh;
+		display: flex;
+		flex-direction: column;
+		border: 1px solid var(--line);
+		border-radius: .6rem;
+		background: #0f1115f7;
+		color: var(--text);
+		box-shadow: 0 8px 28px #000a;
+		overflow: hidden;
+	}
+	#debug[hidden] { display: none; }
+	#debug-head {
+		display: flex;
+		align-items: center;
+		gap: .4rem;
+		padding: .4rem .55rem;
+		border-bottom: 1px solid var(--line);
+		font: 600 12px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
+	}
+	#debug-head span { flex: 1; color: var(--dim); }
+	#debug-head button {
+		font: inherit;
+		padding: .2rem .55rem;
+		border-radius: .35rem;
+		border: 1px solid var(--line);
+		background: var(--card);
+		color: inherit;
+		cursor: pointer;
+	}
+	#debug-head button:hover { background: var(--card-hover); }
+	#debug-out {
+		margin: 0;
+		padding: .55rem .7rem;
+		overflow: auto;
+		white-space: pre-wrap;
+		word-break: break-word;
+		font: 400 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
 </style>
 </head>
 <body>
@@ -473,6 +537,20 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- Ce que la page fait pendant qu'elle charge, pour qui n'a pas de console
+	     sous la main. launcher.js le remplit et le rafraîchit tant qu'il est
+	     ouvert. -->
+	<div id="debug" hidden>
+		<div id="debug-head">
+			<span>Diagnostic du chargement</span>
+			<button id="debug-copy" type="button">Copier</button>
+			<button id="debug-close" type="button">Masquer</button>
+		</div>
+		<pre id="debug-out"></pre>
+	</div>
+	<button id="debug-toggle" type="button" aria-expanded="false"
+		aria-controls="debug">Debug</button>
 
 	<button id="fullscreen" type="button">Plein écran</button>
 
